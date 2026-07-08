@@ -1,0 +1,11 @@
+{
+  "students": [
+    {
+      "studentId": "12345",
+      "barcode": "12345",
+      "firstName": "Gibson",
+      "lastName": "Bell",
+      "grade": "10"
+    }
+  ]
+}
