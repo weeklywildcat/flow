@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "library-checkin",
+  "main": "src/library.ts",
+  "compatibility_date": "2026-07-04",
+  "d1_databases": [
+    {
+      "binding": "SIGNAGE_DB",
+      "database_name": "wildcat-signage",
+      "database_id": "485a843f-de3c-4cb2-870d-409a079bbd3f"
+    }
+  ]
+}
