@@ -2164,11 +2164,143 @@ function kioskHtml(): string {
       .student-form select { min-height: 48px; font-size: 19px; }
     }
 
+    /* Shared Apple-inspired design language; motion behavior stays unchanged. */
+    :root {
+      --bg: #f5f5f7;
+      --surface: rgba(255, 255, 255, .9);
+      --ink: #1d1d1f;
+      --muted: #6e6e73;
+      --line: rgba(0, 0, 0, .1);
+      --maroon: #007aff;
+      --maroon-soft: #eaf3ff;
+      --green: #248a3d;
+      --green-soft: #edf8f0;
+      --red: #d70015;
+      --red-soft: #fff0f1;
+      --amber: #a05a00;
+      --amber-soft: #fff7e8;
+      --focus: #007aff;
+      --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+      --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+    }
 
+    body {
+      background:
+        radial-gradient(circle at 12% -10%, rgba(0, 122, 255, .09), transparent 30%),
+        radial-gradient(circle at 92% 110%, rgba(175, 82, 222, .055), transparent 28%),
+        var(--bg);
+    }
 
+    .topbar,
+    .footer {
+      background: rgba(255, 255, 255, .72);
+      border-color: rgba(0, 0, 0, .08);
+      backdrop-filter: blur(22px) saturate(160%);
+    }
 
+    .brand { font-weight: 700; letter-spacing: -.025em; }
+    .eyebrow { color: var(--blue, #007aff); font-weight: 700; letter-spacing: .06em; }
+    h1 { font-weight: 760; letter-spacing: -.045em; }
+    .lead { color: var(--muted); font-weight: 520; letter-spacing: -.015em; }
 
+    .scan-status {
+      border-color: rgba(0, 0, 0, .08);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, .82);
+      box-shadow: 0 2px 4px rgba(0, 0, 0, .025), 0 18px 54px rgba(0, 0, 0, .07);
+      backdrop-filter: blur(20px) saturate(155%);
+    }
 
+    .scan-symbol {
+      border-radius: 18px;
+      border-color: rgba(0, 122, 255, .14);
+      background: rgba(0, 122, 255, .08);
+      color: #007aff;
+    }
+
+    .status-title { font-weight: 720; letter-spacing: -.025em; }
+    .status-detail { color: var(--muted); }
+
+    .reason {
+      border-color: rgba(0, 0, 0, .09);
+      border-radius: 17px;
+      background: rgba(255, 255, 255, .82);
+      color: var(--ink);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .035);
+      backdrop-filter: blur(14px);
+    }
+
+    .reason:hover,
+    .reason:focus-visible {
+      border-color: rgba(0, 122, 255, .32);
+      background: #fff;
+      box-shadow: 0 12px 30px rgba(0, 122, 255, .1);
+    }
+
+    .reason.selected {
+      border-color: rgba(36, 138, 61, .26);
+      background: var(--green-soft);
+      color: var(--green);
+      box-shadow: 0 12px 30px rgba(36, 138, 61, .11);
+    }
+
+    .student-form,
+    .pairing-form {
+      border-color: rgba(0, 0, 0, .08);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, .86);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, .08);
+      backdrop-filter: blur(22px) saturate(155%);
+    }
+
+    .student-form input,
+    .student-form select,
+    .pairing-form input {
+      border-color: rgba(0, 0, 0, .12);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, .95);
+    }
+
+    .student-form input:focus,
+    .student-form select:focus,
+    .pairing-form input:focus {
+      border-color: #007aff;
+      box-shadow: 0 0 0 4px rgba(0, 122, 255, .12);
+      background: #fff;
+    }
+
+    .student-form button,
+    .pairing-form button {
+      border-radius: 13px;
+      background: #007aff;
+      box-shadow: 0 12px 30px rgba(0, 122, 255, .2);
+    }
+
+    .cancel {
+      border-radius: 12px;
+      color: #007aff;
+      background: rgba(0, 122, 255, .08);
+    }
+
+    body[data-tone="working"] {
+      background: radial-gradient(circle at 50% 44%, rgba(255, 159, 10, .12), transparent 38%), var(--amber-soft);
+    }
+    body[data-tone="success"] {
+      background: radial-gradient(circle at 50% 44%, rgba(52, 199, 89, .13), transparent 38%), var(--green-soft);
+    }
+    body[data-tone="error"] {
+      background: radial-gradient(circle at 50% 44%, rgba(255, 59, 48, .12), transparent 38%), var(--red-soft);
+    }
+
+    body[data-scan-flash="true"] .scan-status {
+      border-color: rgba(0, 122, 255, .35);
+      box-shadow: 0 20px 58px rgba(0, 122, 255, .14);
+    }
+
+    body[data-scan-flash="true"] .scan-symbol { background: rgba(0, 122, 255, .1); }
+    body[data-scan-flash="true"] .scan-symbol::before {
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.2) 42%, rgba(0,122,255,.22) 50%, rgba(255,255,255,.2) 58%, transparent 100%);
+    }
 
     /* Keep the status cards and roster together in the full-height left column. */
     .app {
