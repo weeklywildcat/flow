@@ -715,28 +715,31 @@ function viewHtml(): string {
       --accent: var(--closed);
     }
 
-    /* Clean public display */
+    /* Full-screen TV signage */
     :root {
-      --bg: #f5f5f7;
-      --ink: #1d1d1f;
-      --muted: #6e6e73;
-      --open: #248a3d;
-      --capacity: #b25000;
-      --closed: #d70015;
+      --ink: #171a1f;
+      --muted: #5f6770;
+      --open: #147a43;
+      --capacity: #9a6400;
+      --closed: #a52832;
+      --wash: #f7f4ea;
     }
 
+    [data-status="open"] { --wash: #edf7f1; }
+    [data-status="capacity"] { --wash: #fff7df; }
+    [data-status="closed"] { --wash: #fbefef; }
+
     body {
-      background:
-        radial-gradient(circle at 18% -12%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 34%),
-        radial-gradient(circle at 92% 112%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 30%),
-        var(--bg);
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+      background: var(--wash);
+      background-image: none;
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
     }
 
     .screen {
-      padding: clamp(28px, 3vw, 58px);
-      gap: clamp(20px, 2.4vw, 44px);
+      padding: clamp(30px, 3.2vw, 62px) clamp(38px, 4.2vw, 82px);
+      gap: clamp(16px, 1.6vw, 30px);
       border: 0;
+      border-left: clamp(14px, 1.1vw, 22px) solid var(--accent);
     }
 
     header,
@@ -744,165 +747,85 @@ function viewHtml(): string {
       justify-content: space-between;
       letter-spacing: 0;
       text-transform: none;
-      font-weight: 600;
     }
 
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 14px;
+    .school {
       color: var(--ink);
-      font-size: clamp(20px, 1.65vw, 32px);
-      font-weight: 700;
+      font-size: clamp(22px, 1.8vw, 36px);
+      font-weight: 800;
       letter-spacing: -.025em;
-    }
-
-    .brand-mark {
-      width: clamp(38px, 3vw, 58px);
-      height: clamp(38px, 3vw, 58px);
-      display: grid;
-      place-items: center;
-      border-radius: 28%;
-      background: var(--ink);
-      color: #fff;
-      font-size: clamp(19px, 1.55vw, 30px);
-      font-weight: 750;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
     }
 
     .time {
       color: var(--muted);
-      font-size: clamp(18px, 1.35vw, 27px);
-      font-weight: 600;
+      font-size: clamp(20px, 1.5vw, 30px);
+      font-weight: 700;
     }
 
-    main { place-items: stretch; }
+    main > section { width: 100%; }
 
-    .status-card {
-      width: min(1480px, 100%);
-      min-height: 100%;
-      margin: 0 auto;
-      padding: clamp(38px, 4.8vw, 88px);
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      grid-template-areas:
-        "symbol eyebrow"
-        "symbol status"
-        "symbol sentence"
-        "message message"
-        "countdown countdown";
-      align-content: center;
-      align-items: center;
-      column-gap: clamp(30px, 4vw, 70px);
-      border: 1px solid rgba(255, 255, 255, .86);
-      border-radius: clamp(30px, 3vw, 56px);
-      background: rgba(255, 255, 255, .78);
-      box-shadow: 0 2px 4px rgba(0, 0, 0, .03), 0 28px 80px rgba(0, 0, 0, .09);
-      backdrop-filter: blur(26px) saturate(155%);
-      text-align: left;
-    }
-
-    .eyebrow {
-      grid-area: eyebrow;
-      align-self: end;
+    h1 {
       color: var(--muted);
-      font-size: clamp(18px, 1.55vw, 30px);
+      font-size: clamp(42px, 4vw, 76px);
       line-height: 1;
-      font-weight: 650;
+      letter-spacing: .16em;
+      font-weight: 800;
     }
-
-    .symbol {
-      grid-area: symbol;
-      display: grid;
-      place-items: center;
-      width: clamp(120px, 11vw, 210px);
-      height: clamp(120px, 11vw, 210px);
-      border-radius: 32%;
-      background: color-mix(in srgb, var(--accent) 11%, white);
-      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
-    }
-
-    .symbol svg { width: 52%; height: 52%; stroke-width: 2.2; }
-
-    h1 { display: none; }
 
     .status {
-      grid-area: status;
-      margin: clamp(10px, 1vw, 18px) 0 0;
-      color: var(--ink);
-      font-size: clamp(76px, 9vw, 168px);
-      line-height: .86;
+      margin-top: clamp(16px, 1.8vw, 32px);
+      font-size: clamp(150px, 17vw, 310px);
+      line-height: .8;
       letter-spacing: -.065em;
-      font-weight: 760;
-      text-transform: none;
+      font-weight: 950;
     }
 
-    [data-status="capacity"] .status { font-size: clamp(68px, 7.7vw, 146px); }
+    [data-status="capacity"] .status {
+      font-size: clamp(116px, 13vw, 238px);
+    }
 
     .sentence {
-      grid-area: sentence;
       display: block;
-      max-width: 1000px;
-      margin-top: clamp(18px, 2vw, 34px);
-      color: var(--muted);
-      font-size: clamp(27px, 2.5vw, 48px);
-      line-height: 1.12;
-      font-weight: 560;
+      max-width: 1400px;
+      margin: clamp(28px, 3vw, 54px) auto 0;
+      color: var(--ink);
+      font-size: clamp(34px, 3.2vw, 62px);
+      line-height: 1.08;
+      font-weight: 750;
       letter-spacing: -.025em;
     }
 
     .message {
-      grid-area: message;
-      max-width: none;
-      width: 100%;
-      margin-top: clamp(28px, 3vw, 52px);
-      padding: clamp(18px, 1.8vw, 30px) clamp(22px, 2.4vw, 42px);
+      max-width: min(1480px, 94vw);
+      margin-top: clamp(26px, 2.6vw, 46px);
+      padding: clamp(18px, 1.6vw, 30px) clamp(28px, 2.6vw, 50px);
       border: 0;
-      border-radius: clamp(18px, 1.6vw, 28px);
-      background: color-mix(in srgb, var(--accent) 9%, white);
-      color: var(--ink);
-      font-size: clamp(26px, 2.35vw, 44px);
-      line-height: 1.18;
-      font-weight: 600;
-      text-align: center;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, .72);
+      box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
+      font-size: clamp(30px, 2.8vw, 54px);
+      line-height: 1.12;
+      font-weight: 750;
     }
 
     .countdown {
-      grid-area: countdown;
-      width: 100%;
-      margin-top: clamp(26px, 2.8vw, 48px);
-      padding-top: clamp(24px, 2.5vw, 42px);
-      border-top: 1px solid rgba(0, 0, 0, .08);
-      text-align: center;
+      margin-top: clamp(24px, 2.4vw, 42px);
     }
 
-    .countdown-label { font-size: clamp(18px, 1.45vw, 28px); letter-spacing: 0; text-transform: none; }
-    .countdown-value { margin-top: 8px; font-size: clamp(62px, 6vw, 112px); letter-spacing: -.045em; }
-    .countdown-time { font-size: clamp(18px, 1.5vw, 29px); font-weight: 600; }
+    .countdown-label { font-size: clamp(22px, 1.9vw, 38px); letter-spacing: .06em; }
+    .countdown-value { font-size: clamp(76px, 7.5vw, 142px); }
+    .countdown-time { font-size: clamp(22px, 1.8vw, 36px); }
 
-    [data-countdown="true"] .status { font-size: clamp(66px, 7.4vw, 138px); }
-    [data-countdown="true"] .status-card { padding-top: clamp(28px, 3.2vw, 58px); padding-bottom: clamp(28px, 3.2vw, 58px); }
-    [data-countdown="true"] .message { font-size: clamp(24px, 2vw, 38px); }
+    [data-countdown="true"] h1 { font-size: clamp(34px, 3vw, 58px); }
+    [data-countdown="true"] .status { font-size: clamp(108px, 11vw, 204px); }
+    [data-countdown="true"][data-status="capacity"] .status { font-size: clamp(86px, 9vw, 168px); }
+    [data-countdown="true"] .sentence { font-size: clamp(28px, 2.5vw, 48px); margin-top: clamp(18px, 1.8vw, 30px); }
 
     .updated {
       color: var(--muted);
-      font-size: clamp(15px, 1.2vw, 23px);
-      font-weight: 550;
+      font-size: clamp(16px, 1.3vw, 25px);
+      font-weight: 650;
       letter-spacing: 0;
-    }
-
-    @media (max-width: 820px), (max-aspect-ratio: 4 / 3) {
-      .screen { min-height: 100vh; height: auto; }
-      .status-card {
-        grid-template-columns: 1fr;
-        grid-template-areas: "symbol" "eyebrow" "status" "sentence" "message" "countdown";
-        justify-items: center;
-        text-align: center;
-      }
-      .symbol { margin-bottom: 26px; }
-      .eyebrow { align-self: auto; }
-      .sentence { text-align: center; }
-      .brand span:last-child { display: none; }
     }
 
     @media (max-aspect-ratio: 4 / 3) {
@@ -928,13 +851,11 @@ function viewHtml(): string {
 <body data-status="closed">
   <div class="screen" aria-live="polite">
     <header>
-      <div class="brand"><span class="brand-mark">W</span><span>Weekly Wildcat Library</span></div>
+      <div class="school">Weekly Wildcat Library</div>
       <div class="time" id="clock"></div>
     </header>
     <main>
-      <section class="status-card">
-        <div class="symbol" id="symbol" aria-hidden="true"></div>
-        <div class="eyebrow">Library status</div>
+      <section>
         <h1>LIBRARY</h1>
         <div class="status" id="status-label">CLOSED</div>
         <div class="sentence" id="sentence">The library is unavailable during lunch.</div>
@@ -945,6 +866,7 @@ function viewHtml(): string {
           <div class="countdown-time" id="countdown-time"></div>
         </div>
       </section>
+      <div class="symbol" id="symbol" aria-hidden="true"></div>
     </main>
     <footer>
       <div class="updated" id="updated">Last updated unavailable</div>
