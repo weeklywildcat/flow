@@ -58,17 +58,17 @@ type ApiStatus = {
 const STATUS_COPY: Record<Status, StatusCopy> = {
   open: {
     label: "OPEN",
-    sentence: "Students may visit during lunch.",
+    sentence: "Students may visit the library.",
     icon: "check",
   },
   capacity: {
     label: "AT CAPACITY",
-    sentence: "Please choose another lunch location.",
+    sentence: "Please wait before visiting the library.",
     icon: "pause",
   },
   closed: {
     label: "CLOSED",
-    sentence: "The library is unavailable during lunch.",
+    sentence: "The library is currently unavailable.",
     icon: "x",
   },
 };
@@ -744,10 +744,12 @@ function viewHtml(): string {
 
     header,
     footer {
-      justify-content: flex-end;
       letter-spacing: 0;
       text-transform: none;
     }
+
+    header { justify-content: flex-end; }
+    footer { justify-content: flex-start; }
 
     .time {
       color: var(--muted);
@@ -850,7 +852,7 @@ function viewHtml(): string {
       <section>
         <h1>LIBRARY</h1>
         <div class="status" id="status-label">CLOSED</div>
-        <div class="sentence" id="sentence">The library is unavailable during lunch.</div>
+        <div class="sentence" id="sentence">The library is currently unavailable.</div>
         <div class="message" id="message"></div>
         <div class="countdown" id="countdown">
           <div class="countdown-label">Opening In</div>
@@ -925,7 +927,7 @@ function viewHtml(): string {
         render({
           status: 'closed',
           label: 'CLOSED',
-          sentence: 'The library is unavailable during lunch.',
+          sentence: 'The library is currently unavailable.',
           icon: 'x',
           message: '',
           scheduledOpen: null,
