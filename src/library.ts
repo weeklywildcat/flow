@@ -153,7 +153,14 @@ export default {
       }
 
       if (pathname === "/library/manage") {
-        return request.method === "GET" ? html(manageHtml()) : methodNotAllowed(["GET"]);
+        if (request.method !== "GET") return methodNotAllowed(["GET"]);
+        if (url.searchParams.get("pair") === "1" && !isStaffAuthorized(request)) {
+          return json({ error: "Unauthorized." }, 401);
+        }
+        const pairing = url.searchParams.get("pair") === "1"
+          ? await createKioskPairing(request, env)
+          : undefined;
+        return html(manageHtml(pairing));
       }
 
       if (pathname === "/api/library/scan") {
@@ -501,6 +508,10 @@ async function handleCreateStudent(request: Request, env: LibraryEnv, ctx: Execu
 }
 
 async function handleCreateKioskPairing(request: Request, env: LibraryEnv): Promise<Response> {
+  return json(await createKioskPairing(request, env));
+}
+
+async function createKioskPairing(request: Request, env: LibraryEnv): Promise<{ pin: string; expiresAt: string }> {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
   const pin = randomDigits(8);
@@ -516,7 +527,7 @@ async function handleCreateKioskPairing(request: Request, env: LibraryEnv): Prom
     ).bind(pinHash, expiresAt, now.toISOString(), getActor(request)),
   ]);
 
-  return json({ pin, expiresAt });
+  return { pin, expiresAt };
 }
 
 async function handleKioskEnrollment(request: Request, env: LibraryEnv): Promise<Response> {
@@ -2870,7 +2881,15 @@ function kioskHtml(): string {
 </body>
 </html>`;
 }
-function manageHtml(): string {
+function manageHtml(pairing?: { pin: string; expiresAt: string }): string {
+  const pairingCode = pairing ? `${pairing.pin.slice(0, 4)} ${pairing.pin.slice(4)}` : "";
+  const pairingExpiry = pairing ? new Intl.DateTimeFormat("en-US", {
+    timeZone: TIMEZONE,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(pairing.expiresAt)) : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -4491,9 +4510,9 @@ function manageHtml(): string {
             <div class="setting-helper">Generate a PIN, then enter it once on the kiosk. The PIN expires after 10 minutes.</div>
             <div class="kiosk-actions">
               <button class="secondary" id="generate-kiosk-pin" type="button">Generate pairing PIN</button>
-              <div class="pairing-card" id="pairing-card" hidden>
-                <div class="pairing-code" id="pairing-code"></div>
-                <div class="pairing-expiry" id="pairing-expiry"></div>
+              <div class="pairing-card" id="pairing-card"${pairing ? "" : " hidden"}>
+                <div class="pairing-code" id="pairing-code">${escapeHtml(pairingCode)}</div>
+                <div class="pairing-expiry" id="pairing-expiry">${pairing ? `Expires ${escapeHtml(pairingExpiry)}` : ""}</div>
               </div>
               <div class="device-list" id="kiosk-devices"><div class="device-meta">Loading paired devices…</div></div>
             </div>
@@ -4726,22 +4745,11 @@ function manageHtml(): string {
 
     $('refresh').addEventListener('click', () => refresh({ manual: true }));
 
-    $('generate-kiosk-pin').addEventListener('click', async () => {
+    $('generate-kiosk-pin').addEventListener('click', () => {
       const button = $('generate-kiosk-pin');
       button.disabled = true;
       setNotice('Generating pairing PIN...');
-      try {
-        const data = await post('/library/manage?api=kiosk-pairing', {});
-        const pin = String(data.pin || '');
-        $('pairing-code').textContent = pin.slice(0, 4) + ' ' + pin.slice(4);
-        $('pairing-expiry').textContent = 'Expires ' + dateTimeFormatter.format(new Date(data.expiresAt));
-        $('pairing-card').hidden = false;
-        setNotice('Pairing PIN ready.', 'success');
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : 'Could not generate pairing PIN.', 'error');
-      } finally {
-        button.disabled = false;
-      }
+      window.location.assign('/library/manage?pair=1&t=' + Date.now());
     });
 
     $('kiosk-devices').addEventListener('click', async (event) => {
