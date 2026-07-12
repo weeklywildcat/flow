@@ -512,6 +512,7 @@ async function handleCreateKioskPairing(request: Request, env: LibraryEnv): Prom
 }
 
 async function createKioskPairing(request: Request, env: LibraryEnv): Promise<{ pin: string; expiresAt: string }> {
+  await ensureKioskPairingTables(env);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
   const pin = randomDigits(8);
@@ -531,6 +532,7 @@ async function createKioskPairing(request: Request, env: LibraryEnv): Promise<{ 
 }
 
 async function handleKioskEnrollment(request: Request, env: LibraryEnv): Promise<Response> {
+  await ensureKioskPairingTables(env);
   const rateLimitKey = request.headers.get("CF-Connecting-IP")?.trim() || "unknown";
   if (env.KIOSK_ENROLL_RATE_LIMITER) {
     const result = await env.KIOSK_ENROLL_RATE_LIMITER.limit({ key: `kiosk-enroll:${rateLimitKey}` });
@@ -569,6 +571,37 @@ async function handleKioskEnrollment(request: Request, env: LibraryEnv): Promise
     token,
     device: { id: Number(inserted.meta.last_row_id), name },
   });
+}
+
+async function ensureKioskPairingTables(env: LibraryEnv): Promise<void> {
+  await env.SIGNAGE_DB.batch([
+    env.SIGNAGE_DB.prepare(
+      `CREATE TABLE IF NOT EXISTS library_kiosk_pairing_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pin_hash TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        used_at TEXT,
+        created_at TEXT NOT NULL,
+        created_by TEXT NOT NULL
+      )`
+    ),
+    env.SIGNAGE_DB.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_library_kiosk_pairing_active ON library_kiosk_pairing_codes(expires_at, used_at)"
+    ),
+    env.SIGNAGE_DB.prepare(
+      `CREATE TABLE IF NOT EXISTS library_kiosk_devices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT,
+        revoked_at TEXT
+      )`
+    ),
+    env.SIGNAGE_DB.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_library_kiosk_devices_active ON library_kiosk_devices(revoked_at, last_seen_at)"
+    ),
+  ]);
 }
 
 async function handleKioskDevices(env: LibraryEnv): Promise<Response> {
