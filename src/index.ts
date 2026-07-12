@@ -780,7 +780,7 @@ function viewHtml(): string {
     }
 
     .sentence {
-      display: block;
+      display: none;
       max-width: 1400px;
       margin: clamp(28px, 3vw, 54px) auto 0;
       color: var(--ink);
