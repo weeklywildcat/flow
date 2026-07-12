@@ -739,21 +739,14 @@ function viewHtml(): string {
       padding: clamp(30px, 3.2vw, 62px) clamp(38px, 4.2vw, 82px);
       gap: clamp(16px, 1.6vw, 30px);
       border: 0;
-      border-left: clamp(14px, 1.1vw, 22px) solid var(--accent);
+      border-top: clamp(20px, 1.6vw, 32px) solid var(--accent);
     }
 
     header,
     footer {
-      justify-content: space-between;
+      justify-content: flex-end;
       letter-spacing: 0;
       text-transform: none;
-    }
-
-    .school {
-      color: var(--ink);
-      font-size: clamp(22px, 1.8vw, 36px);
-      font-weight: 800;
-      letter-spacing: -.025em;
     }
 
     .time {
@@ -851,7 +844,6 @@ function viewHtml(): string {
 <body data-status="closed">
   <div class="screen" aria-live="polite">
     <header>
-      <div class="school">Weekly Wildcat Library</div>
       <div class="time" id="clock"></div>
     </header>
     <main>
