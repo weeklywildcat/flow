@@ -2253,6 +2253,21 @@ function kioskHtml(): string {
       backdrop-filter: blur(22px) saturate(155%);
     }
 
+    .pairing-form {
+      width: min(520px, calc(100vw - 32px));
+      padding: clamp(14px, 2.4vw, 24px);
+      overflow: hidden;
+    }
+
+    .pairing-form button {
+      width: 100%;
+      min-width: 0;
+      padding: 0 16px;
+      white-space: normal;
+      line-height: 1.15;
+      font-size: clamp(16px, 2.6vw, 21px);
+    }
+
     .student-form input,
     .student-form select,
     .pairing-form input {
@@ -4743,6 +4758,10 @@ function manageHtml(pairing?: { pin: string; expiresAt: string }): string {
     .save-buttons { grid-template-columns: 1.25fr .75fr; }
     #save { min-height: 44px; }
     #reset { color: var(--muted); }
+    .student-row button.danger {
+      background: #d70015;
+      color: #fff;
+    }
 
     @media (max-height: 740px) and (min-width: 981px) {
       .app { grid-template-rows: 52px minmax(0, 1fr); }
