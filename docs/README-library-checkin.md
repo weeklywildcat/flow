@@ -88,23 +88,19 @@ http://localhost:8787/library/kiosk
 
 Type `12345` and press Enter anywhere on the page. In local dev, the kiosk also shows a small `Test scan 12345` button.
 
-## Kiosk token
+## Chromebook pairing
 
-Set a kiosk token after deploy:
-
-```bash
-npx wrangler secret put KIOSK_TOKEN -c wrangler.library.jsonc
-```
-
-Then open the Chromebook kiosk once with:
+Keep the Chromebook on a persistent Chrome profile and open:
 
 ```txt
-https://library.weeklywildcat.com/library/kiosk?token=YOUR_KIOSK_TOKEN
+https://signage.weeklywildcat.com/library/kiosk
 ```
 
-The page stores the token in localStorage and removes it from the URL.
+The first launch shows a pairing screen. From the Access-protected manage dashboard, choose **Generate pairing PIN**, then enter that 8-digit PIN on the Chromebook. The PIN expires after 10 minutes and can only be used once. The browser stores the resulting device credential in local storage, so normal restarts do not require another setup step.
 
-Use Cloudflare Access for `/library/manage`, `/api/library/current`, `/api/library/settings`, `/api/library/clear`, `/api/library/import-students`, and `/api/library/sync-sheets`. Leave `/api/library/scan`, `/api/library/checkin`, and `/api/library/checkout` reachable for the Chromebook kiosk; those endpoints are protected by `KIOSK_TOKEN`.
+The manage dashboard lists paired Chromebooks and can revoke one at any time. A revoked Chromebook returns to the pairing screen.
+
+Use Cloudflare Access for `/library/manage` and the staff API routes. Keep `/api/library/kiosk-enroll`, `/api/library/kiosk-status`, `/api/library/scan`, `/api/library/checkin`, `/api/library/checkout`, and `/api/library/create-student` outside interactive Access login; the Worker requires a valid one-time PIN or paired-device credential for those routes.
 
 ## Student roster import
 
