@@ -2,12 +2,42 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "library-checkin",
   "main": "src/library.ts",
-  "compatibility_date": "2026-07-04",
+  "compatibility_date": "2026-07-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "signage.weeklywildcat.com/library/*",
+      "zone_name": "weeklywildcat.com"
+    },
+    {
+      "pattern": "signage.weeklywildcat.com/api/library/*",
+      "zone_name": "weeklywildcat.com"
+    },
+    {
+      "pattern": "signage.weeklywildcat.com/api/signage/library*",
+      "zone_name": "weeklywildcat.com"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "SIGNAGE_DB",
       "database_name": "wildcat-signage",
       "database_id": "485a843f-de3c-4cb2-870d-409a079bbd3f"
     }
-  ]
+  ],
+  "ratelimits": [
+    {
+      "name": "KIOSK_ENROLL_RATE_LIMITER",
+      "namespace_id": "3301",
+      "simple": {
+        "limit": 5,
+        "period": 60
+      }
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
 }

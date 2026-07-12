@@ -127,6 +127,30 @@ CREATE TABLE IF NOT EXISTS library_opening_presets (
   created_by TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS library_kiosk_pairing_codes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pin_hash TEXT NOT NULL UNIQUE,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_library_kiosk_pairing_active
+  ON library_kiosk_pairing_codes(expires_at, used_at);
+
+CREATE TABLE IF NOT EXISTS library_kiosk_devices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT,
+  revoked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_library_kiosk_devices_active
+  ON library_kiosk_devices(revoked_at, last_seen_at);
+
 INSERT INTO library_open_schedule (id, opens_at, time_value, updated_at, updated_by)
 VALUES (1, NULL, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'Library staff')
 ON CONFLICT(id) DO NOTHING;

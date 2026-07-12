@@ -5,7 +5,20 @@ type CheckoutMethod = "scan_out" | "librarian" | "clear_all" | "auto_end_of_day"
 type LibraryEnv = Env & {
   SHEETS_WEBHOOK_URL?: string;
   SHEETS_WEBHOOK_SECRET?: string;
-  KIOSK_TOKEN?: string;
+};
+
+type KioskDeviceRow = {
+  id: number;
+  name: string;
+  created_at: string;
+  last_seen_at: string | null;
+  revoked_at: string | null;
+};
+
+type KioskPairingRow = {
+  id: number;
+  expires_at: string;
+  used_at: string | null;
 };
 
 type StudentRow = {
@@ -95,6 +108,7 @@ const REASONS = [
   "Meeting",
   "Other",
 ];
+const GRADE_OPTIONS = ["9", "10", "11", "12"];
 
 const API_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
@@ -109,16 +123,15 @@ const HTML_HEADERS = {
 };
 
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
     const pathname = normalizePath(url.pathname);
 
     try {
-      await ensureLibraryTables(env);
-
       if (pathname.startsWith("/api/library/")) {
-        const kioskAllowed = pathname === "/api/library/scan" || pathname === "/api/library/checkin" || pathname === "/api/library/checkout";
-        const authorized = kioskAllowed ? isKioskOrStaffAuthorized(request, env) : isStaffAuthorized(request, env);
+        const kioskAllowed = pathname === "/api/library/scan" || pathname === "/api/library/checkin" || pathname === "/api/library/checkout" || pathname === "/api/library/create-student" || pathname === "/api/library/kiosk-status";
+        const pairingAllowed = pathname === "/api/library/kiosk-enroll";
+        const authorized = pairingAllowed || (kioskAllowed ? await isKioskOrStaffAuthorized(request, env) : isStaffAuthorized(request));
         if (!authorized) {
           return json({ error: "Unauthorized." }, 401);
         }
@@ -141,15 +154,39 @@ export default {
       }
 
       if (pathname === "/api/library/checkin") {
-        return request.method === "POST" ? handleCheckin(request, env) : methodNotAllowed(["POST"]);
+        return request.method === "POST" ? handleCheckin(request, env, ctx) : methodNotAllowed(["POST"]);
       }
 
       if (pathname === "/api/library/checkout") {
-        return request.method === "POST" ? handleCheckout(request, env) : methodNotAllowed(["POST"]);
+        return request.method === "POST" ? handleCheckout(request, env, ctx) : methodNotAllowed(["POST"]);
+      }
+
+      if (pathname === "/api/library/create-student") {
+        return request.method === "POST" ? handleCreateStudent(request, env, ctx) : methodNotAllowed(["POST"]);
+      }
+
+      if (pathname === "/api/library/kiosk-status") {
+        return request.method === "GET" ? json({ ok: true, generatedAt: new Date().toISOString() }) : methodNotAllowed(["GET"]);
+      }
+
+      if (pathname === "/api/library/kiosk-enroll") {
+        return request.method === "POST" ? handleKioskEnrollment(request, env) : methodNotAllowed(["POST"]);
+      }
+
+      if (pathname === "/api/library/kiosk-pairing") {
+        return request.method === "POST" ? handleCreateKioskPairing(request, env) : methodNotAllowed(["POST"]);
+      }
+
+      if (pathname === "/api/library/kiosk-devices") {
+        return request.method === "GET" ? handleKioskDevices(env) : methodNotAllowed(["GET"]);
+      }
+
+      if (pathname === "/api/library/kiosk-revoke") {
+        return request.method === "POST" ? handleKioskRevoke(request, env) : methodNotAllowed(["POST"]);
       }
 
       if (pathname === "/api/library/clear") {
-        return request.method === "POST" ? handleClear(request, env) : methodNotAllowed(["POST"]);
+        return request.method === "POST" ? handleClear(request, env, ctx) : methodNotAllowed(["POST"]);
       }
 
       if (pathname === "/api/library/current") {
@@ -161,7 +198,7 @@ export default {
           return json(await getCurrentState(env, true));
         }
         if (request.method === "POST") {
-          return handleSettings(request, env);
+          return handleSettings(request, env, ctx);
         }
         return methodNotAllowed(["GET", "POST"]);
       }
@@ -195,7 +232,7 @@ async function handleScan(request: Request, env: LibraryEnv): Promise<Response> 
 
   const student = await findStudentByBarcode(env, barcode);
   if (!student) {
-    return json({ error: "Student was not found. Ask the librarian for help.", barcode }, 404);
+    return json({ mode: "new_student", barcode, grades: GRADE_OPTIONS, reasons: REASONS, state: await getCurrentState(env, false) });
   }
 
   const activeVisit = await findActiveVisitForStudent(env, student.id);
@@ -226,7 +263,7 @@ async function handleScan(request: Request, env: LibraryEnv): Promise<Response> 
   return json({ mode: "checkin", student: publicStudent(student), reasons: REASONS, state });
 }
 
-async function handleCheckin(request: Request, env: LibraryEnv): Promise<Response> {
+async function handleCheckin(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
   const body = await readJsonBody(request);
   if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
 
@@ -262,7 +299,7 @@ async function handleCheckin(request: Request, env: LibraryEnv): Promise<Respons
   const visit = await getVisitById(env, visitId);
   if (!visit) return json({ error: "Visit could not be created." }, 500);
 
-  await queueSheetEvent(env, {
+  await queueSheetEvent(env, ctx, {
     event: "SIGN_IN",
     timestamp: now,
     visitId,
@@ -274,12 +311,12 @@ async function handleCheckin(request: Request, env: LibraryEnv): Promise<Respons
     checkIn: now,
   });
 
-  await syncSignageStatus(env, "Library check-in system");
+  await safeSyncSignageStatus(env, "Library check-in system");
 
   return json({ ok: true, visit: visitPayload(visit), state: await getCurrentState(env, true) });
 }
 
-async function handleCheckout(request: Request, env: LibraryEnv): Promise<Response> {
+async function handleCheckout(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
   const body = await readJsonBody(request);
   if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
 
@@ -305,16 +342,16 @@ async function handleCheckout(request: Request, env: LibraryEnv): Promise<Respon
 
   await checkoutVisit(env, visit.id, checkoutMethod, actor, now);
   const updatedVisit = await getVisitById(env, visit.id);
-  await syncSignageStatus(env, actor);
+  await safeSyncSignageStatus(env, actor);
 
   if (updatedVisit) {
-    await queueSheetEvent(env, sheetCheckoutPayload("SIGN_OUT", updatedVisit, checkoutMethod, actor, now));
+    await queueSheetEvent(env, ctx, sheetCheckoutPayload("SIGN_OUT", updatedVisit, checkoutMethod, actor, now));
   }
 
   return json({ ok: true, visit: updatedVisit ? visitPayload(updatedVisit) : null, state: await getCurrentState(env, true) });
 }
 
-async function handleClear(request: Request, env: LibraryEnv): Promise<Response> {
+async function handleClear(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
   const body = await readJsonBody(request).catch(() => ({}));
   const actor = getActor(request);
   const now = new Date().toISOString();
@@ -328,14 +365,14 @@ async function handleClear(request: Request, env: LibraryEnv): Promise<Response>
   ).bind(now, method, actor).run();
 
   for (const visit of active) {
-    await queueSheetEvent(env, sheetCheckoutPayload(method === "auto_end_of_day" ? "AUTO_CLEAR" : "CLEAR_ALL", { ...visit, checked_out_at: now, checkout_method: method }, method, actor, now));
+    await queueSheetEvent(env, ctx, sheetCheckoutPayload(method === "auto_end_of_day" ? "AUTO_CLEAR" : "CLEAR_ALL", { ...visit, checked_out_at: now, checkout_method: method }, method, actor, now));
   }
 
-  await syncSignageStatus(env, actor);
+  await safeSyncSignageStatus(env, actor);
   return json({ ok: true, cleared: active.length, state: await getCurrentState(env, true) });
 }
 
-async function handleSettings(request: Request, env: LibraryEnv): Promise<Response> {
+async function handleSettings(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
   const body = await readJsonBody(request);
   if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
 
@@ -344,8 +381,10 @@ async function handleSettings(request: Request, env: LibraryEnv): Promise<Respon
   const manualStatus = isLibraryStatus(body.manualStatus) ? body.manualStatus : current.manual_status;
   const capacity = normalizeCapacity(body.capacity, current.capacity);
   const customMessage = typeof body.customMessage === "string" ? normalizeMessage(body.customMessage, 180) : current.custom_message ?? "";
-  const showPublicCount = typeof body.showPublicCount === "boolean" ? (body.showPublicCount ? 1 : 0) : current.show_public_count;
-  const autoCapacityEnabled = typeof body.autoCapacityEnabled === "boolean" ? (body.autoCapacityEnabled ? 1 : 0) : current.auto_capacity_enabled;
+  // v29: TV count is always shown and automatic capacity behavior is always enabled.
+  // Keep the database fields for compatibility, but stop exposing them as settings.
+  const showPublicCount = 1;
+  const autoCapacityEnabled = 1;
   const scheduledOpenTimeValue = body.scheduledOpenTime;
   const saveOpeningTime = body.saveOpeningTime === true;
   const nowDate = new Date();
@@ -398,15 +437,152 @@ async function handleSettings(request: Request, env: LibraryEnv): Promise<Respon
 
   await env.SIGNAGE_DB.batch(scheduleStatements);
 
-  await queueSheetEvent(env, {
+  await queueSheetEvent(env, ctx, {
     event: "SETTINGS_CHANGED",
     timestamp: now,
     actor,
     reason: `mode=${statusMode}; manual=${manualStatus}; capacity=${capacity}; opens=${scheduledOpen?.label ?? "none"}`,
   });
 
-  await syncSignageStatus(env, actor);
+  await safeSyncSignageStatus(env, actor);
   return json({ ok: true, state: await getCurrentState(env, true) });
+}
+
+async function handleCreateStudent(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
+
+  const barcode = normalizeBarcode(body.barcode);
+  const firstName = normalizeString(body.firstName ?? body.first_name, 80);
+  const lastName = normalizeString(body.lastName ?? body.last_name, 80);
+  const grade = normalizeString(body.grade, 16);
+
+  if (!barcode) return json({ error: "Scan a student ID first." }, 400);
+  if (!firstName || !lastName) return json({ error: "Enter first and last name." }, 400);
+  if (!GRADE_OPTIONS.includes(grade)) return json({ error: "Choose a grade." }, 400);
+
+  const now = new Date().toISOString();
+  const actor = getActor(request);
+
+  await env.SIGNAGE_DB.prepare(
+    `INSERT INTO library_students (student_id, barcode, first_name, last_name, grade, active, updated_at)
+     VALUES (?, ?, ?, ?, ?, 1, ?)
+     ON CONFLICT(student_id) DO UPDATE SET
+       barcode = excluded.barcode,
+       first_name = excluded.first_name,
+       last_name = excluded.last_name,
+       grade = excluded.grade,
+       active = 1,
+       updated_at = excluded.updated_at`
+  ).bind(barcode, barcode, firstName, lastName, grade, now).run();
+
+  const student = await findStudentByBarcode(env, barcode);
+  if (!student) return json({ error: "Student could not be saved." }, 500);
+
+  await queueSheetEvent(env, ctx, {
+    event: "STUDENT_CREATED",
+    timestamp: now,
+    studentId: student.student_id,
+    firstName: student.first_name,
+    lastName: student.last_name,
+    grade: student.grade,
+    reason: "Created from kiosk after unknown barcode scan",
+    actor,
+  });
+
+  return json({ ok: true, mode: "checkin", student: publicStudent(student), reasons: REASONS, state: await getCurrentState(env, false) });
+}
+
+async function handleCreateKioskPairing(request: Request, env: LibraryEnv): Promise<Response> {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
+  const pin = randomDigits(8);
+  const pinHash = await sha256Hex(pin);
+
+  await env.SIGNAGE_DB.batch([
+    env.SIGNAGE_DB.prepare(
+      "UPDATE library_kiosk_pairing_codes SET used_at = ? WHERE used_at IS NULL"
+    ).bind(now.toISOString()),
+    env.SIGNAGE_DB.prepare(
+      `INSERT INTO library_kiosk_pairing_codes (pin_hash, expires_at, created_at, created_by)
+       VALUES (?, ?, ?, ?)`
+    ).bind(pinHash, expiresAt, now.toISOString(), getActor(request)),
+  ]);
+
+  return json({ pin, expiresAt });
+}
+
+async function handleKioskEnrollment(request: Request, env: LibraryEnv): Promise<Response> {
+  const rateLimitKey = request.headers.get("CF-Connecting-IP")?.trim() || "unknown";
+  if (env.KIOSK_ENROLL_RATE_LIMITER) {
+    const result = await env.KIOSK_ENROLL_RATE_LIMITER.limit({ key: `kiosk-enroll:${rateLimitKey}` });
+    if (!result.success) return json({ error: "Too many pairing attempts. Wait a minute and try again." }, 429);
+  }
+
+  const body = await readJsonBody(request);
+  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
+
+  const pin = typeof body.pin === "string" ? body.pin.replace(/\D/g, "").slice(0, 8) : "";
+  const name = normalizeString(body.name, 80) || "Library Chromebook";
+  if (!/^\d{8}$/.test(pin)) return json({ error: "Enter the 8-digit pairing PIN." }, 400);
+
+  const pinHash = await sha256Hex(pin);
+  const now = new Date().toISOString();
+  const pairing = await env.SIGNAGE_DB.prepare(
+    `SELECT id, expires_at, used_at
+     FROM library_kiosk_pairing_codes
+     WHERE pin_hash = ? AND used_at IS NULL AND expires_at > ?`
+  ).bind(pinHash, now).first<KioskPairingRow>();
+  if (!pairing) return json({ error: "That pairing PIN is invalid or expired." }, 401);
+
+  const claimed = await env.SIGNAGE_DB.prepare(
+    "UPDATE library_kiosk_pairing_codes SET used_at = ? WHERE id = ? AND used_at IS NULL"
+  ).bind(now, pairing.id).run();
+  if ((claimed.meta.changes ?? 0) !== 1) return json({ error: "That pairing PIN has already been used." }, 409);
+
+  const token = randomToken(32);
+  const tokenHash = await sha256Hex(token);
+  const inserted = await env.SIGNAGE_DB.prepare(
+    `INSERT INTO library_kiosk_devices (name, token_hash, created_at, last_seen_at)
+     VALUES (?, ?, ?, ?)`
+  ).bind(name, tokenHash, now, now).run();
+
+  return json({
+    token,
+    device: { id: Number(inserted.meta.last_row_id), name },
+  });
+}
+
+async function handleKioskDevices(env: LibraryEnv): Promise<Response> {
+  const result = await env.SIGNAGE_DB.prepare(
+    `SELECT id, name, created_at, last_seen_at, revoked_at
+     FROM library_kiosk_devices
+     ORDER BY created_at DESC`
+  ).all<KioskDeviceRow>();
+  return json({ devices: result.results.map(publicKioskDevice) });
+}
+
+async function handleKioskRevoke(request: Request, env: LibraryEnv): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
+  const deviceId = Number(body.deviceId);
+  if (!Number.isInteger(deviceId) || deviceId < 1) return json({ error: "Invalid kiosk device." }, 400);
+
+  const result = await env.SIGNAGE_DB.prepare(
+    "UPDATE library_kiosk_devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL"
+  ).bind(new Date().toISOString(), deviceId).run();
+  if ((result.meta.changes ?? 0) !== 1) return json({ error: "Kiosk device was not found or is already revoked." }, 404);
+  return json({ ok: true });
+}
+
+function publicKioskDevice(row: KioskDeviceRow) {
+  return {
+    id: row.id,
+    name: row.name,
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at,
+    revokedAt: row.revoked_at,
+  };
 }
 
 async function handleStudentImport(request: Request, env: LibraryEnv): Promise<Response> {
@@ -540,8 +716,8 @@ async function getCurrentState(env: LibraryEnv, includeStudents: boolean) {
     statusMode: settings.status_mode,
     manualStatus: settings.manual_status,
     customMessage: settings.custom_message ?? "",
-    showPublicCount: Boolean(settings.show_public_count),
-    autoCapacityEnabled: Boolean(settings.auto_capacity_enabled),
+    showPublicCount: true,
+    autoCapacityEnabled: true,
     scheduledOpen: await getScheduledOpen(env, now),
     openingTimePresets: await getOpeningTimePresets(env),
     updatedAt: settings.updated_at,
@@ -557,8 +733,8 @@ async function getPublicSignageStatus(env: LibraryEnv) {
   return {
     status: state.status,
     statusLabel: state.statusLabel,
-    currentCount: state.showPublicCount ? state.currentCount : null,
-    capacity: state.showPublicCount ? state.capacity : null,
+    currentCount: state.currentCount,
+    capacity: state.capacity,
     message: state.customMessage,
     scheduledOpen: state.scheduledOpen,
     timezone: TIMEZONE,
@@ -586,13 +762,21 @@ async function syncSignageStatus(env: LibraryEnv, actor: string): Promise<void> 
   ]);
 }
 
+async function safeSyncSignageStatus(env: LibraryEnv, actor: string): Promise<void> {
+  try {
+    await syncSignageStatus(env, actor);
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "library_signage_sync_failed",
+      actor,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+}
+
 function resolveEffectiveLibraryStatus(settings: SettingsRow, currentCount: number): LibraryStatus {
   if (settings.status_mode === "manual") {
     return isLibraryStatus(settings.manual_status) ? settings.manual_status : "closed";
-  }
-
-  if (!settings.auto_capacity_enabled) {
-    return "open";
   }
 
   if (settings.capacity > 0 && currentCount >= settings.capacity) {
@@ -637,15 +821,23 @@ async function getActiveCount(env: LibraryEnv): Promise<number> {
   return row?.count ?? 0;
 }
 
-async function queueSheetEvent(env: LibraryEnv, payload: SheetEventPayload): Promise<void> {
+async function queueSheetEvent(env: LibraryEnv, ctx: ExecutionContext, payload: SheetEventPayload): Promise<void> {
   const payloadJson = JSON.stringify(payload);
-  const result = await env.SIGNAGE_DB.prepare(
-    `INSERT INTO library_sheet_events (event_type, payload_json, created_at)
-     VALUES (?, ?, ?)`
-  ).bind(payload.event, payloadJson, new Date().toISOString()).run();
+  try {
+    const result = await env.SIGNAGE_DB.prepare(
+      `INSERT INTO library_sheet_events (event_type, payload_json, created_at)
+       VALUES (?, ?, ?)`
+    ).bind(payload.event, payloadJson, new Date().toISOString()).run();
 
-  const eventId = Number(result.meta.last_row_id);
-  await sendSheetEvent(env, eventId, payloadJson);
+    const eventId = Number(result.meta.last_row_id);
+    ctx.waitUntil(sendSheetEvent(env, eventId, payloadJson));
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "library_sheet_queue_failed",
+      eventType: payload.event,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
 }
 
 async function sendSheetEvent(env: LibraryEnv, eventId: number, payloadJson: string): Promise<boolean> {
@@ -656,6 +848,7 @@ async function sendSheetEvent(env: LibraryEnv, eventId: number, payloadJson: str
   try {
     const response = await fetch(env.SHEETS_WEBHOOK_URL, {
       method: "POST",
+      signal: AbortSignal.timeout(5000),
       headers: {
         "Content-Type": "application/json",
         "X-Library-Sync-Secret": env.SHEETS_WEBHOOK_SECRET,
@@ -672,6 +865,11 @@ async function sendSheetEvent(env: LibraryEnv, eventId: number, payloadJson: str
     ).bind(new Date().toISOString(), eventId).run();
     return true;
   } catch (error) {
+    console.error(JSON.stringify({
+      event: "library_sheet_sync_failed",
+      eventId,
+      error: error instanceof Error ? error.message : String(error),
+    }));
     await env.SIGNAGE_DB.prepare(
       "UPDATE library_sheet_events SET attempts = attempts + 1, last_error = ? WHERE id = ?"
     ).bind(String(error), eventId).run();
@@ -843,6 +1041,34 @@ async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
         created_at TEXT NOT NULL,
         created_by TEXT NOT NULL
       )`
+    ),
+    env.SIGNAGE_DB.prepare(
+      `CREATE TABLE IF NOT EXISTS library_kiosk_pairing_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pin_hash TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        used_at TEXT,
+        created_at TEXT NOT NULL,
+        created_by TEXT NOT NULL
+      )`
+    ),
+    env.SIGNAGE_DB.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_library_kiosk_pairing_active
+       ON library_kiosk_pairing_codes(expires_at, used_at)`
+    ),
+    env.SIGNAGE_DB.prepare(
+      `CREATE TABLE IF NOT EXISTS library_kiosk_devices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT,
+        revoked_at TEXT
+      )`
+    ),
+    env.SIGNAGE_DB.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_library_kiosk_devices_active
+       ON library_kiosk_devices(revoked_at, last_seen_at)`
     ),
     env.SIGNAGE_DB.prepare(
       `INSERT INTO library_open_schedule (id, opens_at, time_value, updated_at, updated_by)
@@ -1021,18 +1247,57 @@ function getActor(request: Request): string {
   return request.headers.get("CF-Access-Authenticated-User-Email")?.trim() || "Library staff";
 }
 
-function isStaffAuthorized(request: Request, env: LibraryEnv): boolean {
+function isStaffAuthorized(request: Request): boolean {
+  if (isLocalRequest(request)) return true;
   const accessUser = request.headers.get("CF-Access-Authenticated-User-Email")?.trim();
-  if (accessUser) return true;
-
-  // Local/dev mode: before KIOSK_TOKEN is set, allow API calls so Wrangler dev works.
-  return !env.KIOSK_TOKEN;
+  const accessJwt = request.headers.get("Cf-Access-Jwt-Assertion")?.trim();
+  return Boolean(accessUser && accessJwt);
 }
 
-function isKioskOrStaffAuthorized(request: Request, env: LibraryEnv): boolean {
-  if (isStaffAuthorized(request, env)) return true;
+async function isKioskOrStaffAuthorized(request: Request, env: LibraryEnv): Promise<boolean> {
   const token = request.headers.get("X-Kiosk-Token")?.trim();
-  return Boolean(env.KIOSK_TOKEN && token && token === env.KIOSK_TOKEN);
+  if (!token) return isStaffAuthorized(request);
+
+  const tokenHash = await sha256Hex(token);
+  const device = await env.SIGNAGE_DB.prepare(
+    `SELECT id, name, created_at, last_seen_at, revoked_at
+     FROM library_kiosk_devices
+     WHERE token_hash = ? AND revoked_at IS NULL`
+  ).bind(tokenHash).first<KioskDeviceRow>();
+  if (!device) return false;
+
+  const now = new Date();
+  const lastSeen = device.last_seen_at ? new Date(device.last_seen_at).getTime() : 0;
+  if (!lastSeen || now.getTime() - lastSeen > 5 * 60 * 1000) {
+    await env.SIGNAGE_DB.prepare(
+      "UPDATE library_kiosk_devices SET last_seen_at = ? WHERE id = ?"
+    ).bind(now.toISOString(), device.id).run();
+  }
+  return true;
+}
+
+function isLocalRequest(request: Request): boolean {
+  const hostname = new URL(request.url).hostname;
+  return !request.headers.get("CF-Ray") || hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+function randomDigits(length: number): string {
+  const values = new Uint32Array(length);
+  crypto.getRandomValues(values);
+  return Array.from(values, (value) => String(value % 10)).join("");
+}
+
+function randomToken(byteLength: number): string {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function json(payload: unknown, status = 200): Response {
@@ -1106,7 +1371,7 @@ function kioskHtml(): string {
       -webkit-font-smoothing: antialiased;
       text-rendering: optimizeLegibility;
       font-synthesis: none;
-      transition: background-color 180ms ease;
+      transition: background-color 260ms ease, color 260ms ease;
     }
 
     button,
@@ -1176,6 +1441,274 @@ function kioskHtml(): string {
     @keyframes screenFade {
       from { opacity: 0.82; transform: translateY(3px); }
       to { opacity: 1; transform: translateY(0); }
+    }
+
+    body[data-step="success"] .scan-status {
+      width: clamp(78px, 11vh, 108px);
+      min-height: clamp(78px, 11vh, 108px);
+      margin-top: clamp(18px, 3vh, 28px);
+      padding: 0;
+      border-radius: 999px;
+      background: #fff;
+      border-color: rgba(17, 107, 67, 0.22);
+      box-shadow: 0 22px 64px rgba(17, 107, 67, 0.16);
+      display: grid;
+      place-items: center;
+      align-content: center;
+      justify-content: center;
+      gap: 0;
+      animation: successPop 380ms cubic-bezier(.2, .9, .2, 1.18) both;
+    }
+
+    body[data-step="success"] .scan-status > div:last-child {
+      display: none;
+    }
+
+    body[data-step="success"] .scan-symbol {
+      width: clamp(50px, 7vh, 68px);
+      height: clamp(50px, 7vh, 68px);
+      margin: 0;
+      border-radius: 999px;
+      background: currentColor;
+      color: var(--green);
+      border: 0;
+      display: grid;
+      place-items: center;
+      transform-origin: center;
+      animation: checkLift 520ms ease-out both;
+    }
+
+    body[data-step="success"] .scan-symbol svg {
+      display: block;
+      color: #fff;
+      width: 58%;
+      height: 58%;
+      transform-origin: center;
+      transform-box: fill-box;
+      animation: checkMark 460ms ease-out 80ms both;
+    }
+
+    body[data-step="success"] h1,
+    body[data-step="success"] .lead {
+      animation: successText 260ms ease-out both;
+    }
+
+    @keyframes successPop {
+      0% { opacity: 0; transform: scale(.82) translateY(5px); }
+      70% { opacity: 1; transform: scale(1.05) translateY(0); }
+      100% { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    @keyframes checkLift {
+      0% { transform: scale(.86); }
+      60% { transform: scale(1.08); }
+      100% { transform: scale(1); }
+    }
+
+    @keyframes checkMark {
+      0% { opacity: 0; transform: scale(.72) rotate(-6deg); }
+      100% { opacity: 1; transform: scale(1) rotate(0); }
+    }
+
+    @keyframes successText {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* v26 kiosk motion polish */
+    body[data-step="idle"][data-tone="idle"] .scan-status {
+      animation: idleBreath 3.8s ease-in-out infinite;
+    }
+
+    body[data-step="idle"][data-tone="idle"] .scan-symbol {
+      animation: idleIconBreath 3.8s ease-in-out infinite;
+    }
+
+    body[data-scan-flash="true"] .scan-status {
+      border-color: rgba(116, 31, 39, 0.42);
+      box-shadow: 0 20px 58px rgba(116, 31, 39, 0.16);
+      animation: scanCapture 280ms ease-out both;
+    }
+
+    body[data-scan-flash="true"] .scan-symbol {
+      background: rgba(116, 31, 39, 0.08);
+      animation: scanIconCapture 300ms ease-out both;
+    }
+
+    body[data-scan-flash="true"] .scan-symbol::before {
+      content: "";
+      position: absolute;
+      inset: -20%;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.2) 42%, rgba(116,31,39,.22) 50%, rgba(255,255,255,.2) 58%, transparent 100%);
+      transform: translateX(-80%);
+      animation: captureSweep 280ms ease-out both;
+      pointer-events: none;
+    }
+
+    body[data-step="reasons"] .reason {
+      position: relative;
+      overflow: hidden;
+      animation: reasonIn 280ms cubic-bezier(.2, .85, .25, 1) both;
+      transition: transform 120ms ease, background 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
+    }
+
+    body[data-step="reasons"] .reason:nth-child(1) { animation-delay: 0ms; }
+    body[data-step="reasons"] .reason:nth-child(2) { animation-delay: 38ms; }
+    body[data-step="reasons"] .reason:nth-child(3) { animation-delay: 76ms; }
+    body[data-step="reasons"] .reason:nth-child(4) { animation-delay: 114ms; }
+    body[data-step="reasons"] .reason:nth-child(5) { animation-delay: 152ms; }
+    body[data-step="reasons"] .reason:nth-child(6) { animation-delay: 190ms; }
+
+    .reason.selected {
+      background: var(--green-soft);
+      border-color: rgba(17, 107, 67, 0.38);
+      color: var(--green);
+      box-shadow: 0 14px 34px rgba(17, 107, 67, 0.13);
+      transform: scale(.985);
+    }
+
+    .reason.selected::after {
+      content: "✓";
+      position: absolute;
+      right: 18px;
+      top: 50%;
+      width: 30px;
+      height: 30px;
+      margin-top: -15px;
+      border-radius: 999px;
+      background: var(--green);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font: 850 17px/1 var(--font-display);
+      animation: selectedCheck 180ms ease-out both;
+    }
+
+    .reason-grid[data-selecting="true"] .reason:not(.selected) {
+      opacity: .48;
+      transform: scale(.985);
+    }
+
+    body[data-step="new-student"] .student-form {
+      animation: formRise 260ms cubic-bezier(.2, .85, .25, 1) both;
+    }
+
+    body[data-step="new-student"] .student-form-field,
+    body[data-step="new-student"] .student-form-actions {
+      animation: fieldIn 240ms ease-out both;
+    }
+
+    body[data-step="new-student"] .student-form-field:nth-child(1) { animation-delay: 40ms; }
+    body[data-step="new-student"] .student-form-field:nth-child(2) { animation-delay: 75ms; }
+    body[data-step="new-student"] .student-form-field:nth-child(3) { animation-delay: 110ms; }
+    body[data-step="new-student"] .student-form-actions { animation-delay: 145ms; }
+
+    .student-form-field {
+      transition: transform 140ms ease;
+    }
+
+    .student-form-field:focus-within {
+      transform: translateY(-1px);
+    }
+
+    .student-form-field:focus-within label {
+      color: var(--maroon);
+    }
+
+    .student-form input,
+    .student-form select {
+      transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease, background-color 140ms ease;
+    }
+
+    .student-form input:focus,
+    .student-form select:focus {
+      box-shadow: 0 12px 32px rgba(116, 31, 39, 0.10);
+      background: #fffafa;
+    }
+
+    .student-form button[type="submit"] {
+      transition: transform 110ms ease, box-shadow 140ms ease, background-color 140ms ease;
+      box-shadow: 0 14px 34px rgba(116, 31, 39, 0.16);
+    }
+
+    .student-form button[type="submit"]:active {
+      transform: scale(.99);
+    }
+
+    body[data-step="success"] h1 {
+      animation: successText 260ms ease-out 80ms both;
+    }
+
+    body[data-step="success"] .lead {
+      animation: successText 260ms ease-out 150ms both;
+    }
+
+    body[data-success-type="checkout"] .scan-status {
+      animation: checkoutPop 420ms cubic-bezier(.2, .86, .18, 1.16) both;
+    }
+
+    body[data-success-type="checkout"] .scan-symbol {
+      animation: checkoutLift 520ms ease-out both;
+    }
+
+    @keyframes idleBreath {
+      0%, 100% { transform: translateY(0); box-shadow: 0 18px 50px rgba(30, 24, 20, 0.07); }
+      50% { transform: translateY(-1px); box-shadow: 0 22px 56px rgba(116, 31, 39, 0.10); }
+    }
+
+    @keyframes idleIconBreath {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.025); opacity: .96; }
+    }
+
+    @keyframes scanCapture {
+      0% { transform: scale(1); }
+      45% { transform: scale(.985); }
+      100% { transform: scale(1); }
+    }
+
+    @keyframes scanIconCapture {
+      0% { transform: scale(1); }
+      55% { transform: scale(1.08); }
+      100% { transform: scale(1); }
+    }
+
+    @keyframes captureSweep {
+      from { transform: translateX(-80%); opacity: 0; }
+      28% { opacity: 1; }
+      to { transform: translateX(80%); opacity: 0; }
+    }
+
+    @keyframes reasonIn {
+      from { opacity: 0; transform: translateY(9px) scale(.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @keyframes selectedCheck {
+      from { opacity: 0; transform: scale(.72); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    @keyframes formRise {
+      from { opacity: 0; transform: translateY(10px) scale(.99); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @keyframes fieldIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes checkoutPop {
+      0% { opacity: 0; transform: translateY(-4px) scale(.84); }
+      70% { opacity: 1; transform: translateY(1px) scale(1.04); }
+      100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @keyframes checkoutLift {
+      0% { transform: translateY(4px) scale(.86); }
+      60% { transform: translateY(-2px) scale(1.07); }
+      100% { transform: translateY(0) scale(1); }
     }
 
     .eyebrow {
@@ -1297,8 +1830,142 @@ function kioskHtml(): string {
       gap: clamp(10px, 1.65vh, 14px);
     }
 
-    body[data-step="reasons"] .scan-status { display: none; }
+    body[data-step="reasons"] .scan-status,
+    body[data-step="new-student"] .scan-status,
+    body[data-step="pairing"] .scan-status {
+      display: none;
+    }
+
     body[data-step="reasons"] .reason-grid { display: grid; }
+
+    .student-form {
+      display: none;
+      width: min(640px, 100%);
+      margin-top: clamp(18px, 3vh, 28px);
+      gap: clamp(12px, 2vh, 16px);
+      text-align: left;
+    }
+
+    body[data-step="new-student"] .student-form { display: grid; }
+
+    .pairing-form {
+      display: none;
+      width: min(520px, 100%);
+      margin-top: clamp(18px, 3vh, 28px);
+      gap: 14px;
+      text-align: left;
+    }
+
+    body[data-step="pairing"] .pairing-form { display: grid; }
+
+    .pairing-form label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: .055em;
+      text-transform: uppercase;
+    }
+
+    .pairing-form input {
+      width: 100%;
+      min-height: 64px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+      color: var(--ink);
+      padding: 0 16px;
+      font: 750 30px/1 var(--font-display);
+      letter-spacing: .16em;
+      text-align: center;
+    }
+
+    .pairing-form input:focus-visible {
+      outline: 4px solid var(--focus);
+      outline-offset: 2px;
+      border-color: transparent;
+    }
+
+    .pairing-form button {
+      min-height: 58px;
+      border: 0;
+      border-radius: 18px;
+      background: var(--maroon);
+      color: #fff;
+      font: 750 21px/1 var(--font-display);
+      cursor: pointer;
+    }
+
+    .pairing-error {
+      min-height: 20px;
+      color: var(--red);
+      font-size: 15px;
+      font-weight: 650;
+      text-align: center;
+    }
+
+    .student-form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .student-form-field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .student-form-field.full { grid-column: 1 / -1; }
+
+    .student-form label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: .055em;
+      text-transform: uppercase;
+    }
+
+    .student-form input,
+    .student-form select {
+      width: 100%;
+      min-height: 54px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+      color: var(--ink);
+      padding: 0 16px;
+      font: 650 22px/1 var(--font-display);
+      letter-spacing: -0.015em;
+    }
+
+    .student-form input:focus-visible,
+    .student-form select:focus-visible {
+      outline: 4px solid var(--focus);
+      outline-offset: 2px;
+      border-color: transparent;
+    }
+
+    .student-form-actions {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    .student-form button[type="submit"] {
+      min-height: 58px;
+      border: 0;
+      border-radius: 18px;
+      background: var(--maroon);
+      color: #fff;
+      font: 750 21px/1 var(--font-display);
+      letter-spacing: -0.012em;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .student-form button[type="submit"]:focus-visible {
+      outline: 4px solid var(--focus);
+      outline-offset: 2px;
+    }
 
     .reason {
       min-height: clamp(62px, 10vh, 82px);
@@ -1350,7 +2017,8 @@ function kioskHtml(): string {
       touch-action: manipulation;
     }
 
-    body[data-step="reasons"] .cancel {
+    body[data-step="reasons"] .cancel,
+    body[data-step="new-student"] .cancel {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1387,15 +2055,6 @@ function kioskHtml(): string {
       padding: 0;
     }
 
-    .dev-tools {
-      position: fixed;
-      right: 14px;
-      bottom: 52px;
-      z-index: 4;
-      display: none;
-    }
-
-    body[data-dev="true"] .dev-tools { display: block; }
 
     .dev-tools button {
       min-height: 34px;
@@ -1451,6 +2110,167 @@ function kioskHtml(): string {
       .reason-grid { grid-template-columns: 1fr; width: min(420px, 100%); }
       .reason { min-height: 50px; }
       .reason span { font-size: 21px; }
+      .student-form-grid { grid-template-columns: 1fr; }
+      .student-form input,
+      .student-form select { min-height: 48px; font-size: 19px; }
+    }
+
+
+
+
+
+
+
+    /* Keep the status cards and roster together in the full-height left column. */
+    .app {
+      height: 100vh;
+      height: 100dvh;
+      min-height: 0;
+      grid-template-rows: 58px minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    .workspace {
+      min-height: 0;
+      height: 100%;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 390px;
+      gap: 14px;
+      align-items: stretch;
+      overflow: hidden;
+    }
+
+    .roster-stack {
+      min-height: 0;
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 14px;
+      overflow: hidden;
+    }
+
+    .roster-stack > .statusbar {
+      width: 100%;
+      min-height: 98px;
+      height: auto;
+      max-height: none;
+      display: grid;
+      grid-template-columns: minmax(0, 1.14fr) minmax(0, 1fr) minmax(0, 1.04fr);
+      overflow: visible;
+    }
+
+    .roster-stack > .statusbar .stat {
+      min-height: 0;
+      padding: 16px 18px 15px;
+      gap: 8px;
+      align-content: center;
+      overflow: visible;
+    }
+
+    .roster-stack > .statusbar .value,
+    .roster-stack > .statusbar .primary-stat .value {
+      line-height: 1.15;
+      overflow: visible;
+    }
+
+    .roster-stack > .statusbar .capacity-meter {
+      margin-top: 4px;
+    }
+
+    .roster-panel {
+      min-height: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    .roster-panel > div:last-child {
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .roster-panel .student-list {
+      min-height: 0;
+      height: calc(100% - 36px);
+      overflow: auto;
+    }
+
+    .settings-panel {
+      min-height: 0;
+      height: 100%;
+      align-self: stretch;
+      overflow: hidden;
+    }
+
+    .settings-panel .control-body {
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-bottom: 18px;
+    }
+
+    .settings-panel .savebar {
+      flex: 0 0 auto;
+    }
+
+    @media (max-height: 740px) and (min-width: 981px) {
+      .app {
+        grid-template-rows: 52px minmax(0, 1fr);
+        gap: 12px;
+      }
+
+      .workspace,
+      .roster-stack {
+        gap: 12px;
+      }
+
+      .roster-stack > .statusbar {
+        min-height: 88px;
+      }
+
+      .roster-stack > .statusbar .stat {
+        padding: 13px 16px 12px;
+        gap: 6px;
+      }
+
+      .roster-stack > .statusbar .value {
+        font-size: clamp(19px, 1.8vw, 24px);
+        line-height: 1.14;
+      }
+
+      .roster-stack > .statusbar .primary-stat .value {
+        font-size: clamp(23px, 2.15vw, 28px);
+      }
+    }
+
+    @media (max-width: 980px) {
+      .app {
+        height: auto;
+        min-height: 100vh;
+        overflow: auto;
+        grid-template-rows: auto auto;
+      }
+
+      .workspace {
+        height: auto;
+        overflow: visible;
+        grid-template-columns: 1fr;
+      }
+
+      .roster-stack {
+        height: auto;
+        overflow: visible;
+        grid-template-rows: auto auto;
+      }
+
+      .roster-stack > .statusbar {
+        grid-template-columns: 1fr;
+        min-height: 0;
+      }
+
+      .settings-panel {
+        height: auto;
+        overflow: visible;
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -1467,8 +2287,8 @@ function kioskHtml(): string {
     <main class="stage">
       <section class="screen" aria-live="polite">
         <div class="eyebrow" id="eyebrow">Library Check-In</div>
-        <h1 id="headline">Welcome to the Library</h1>
-        <p class="lead" id="lead">Scan your student ID.</p>
+        <h1 id="headline">Scan your student ID.</h1>
+        <p class="lead" id="lead">Check in or check out.</p>
 
         <div class="scan-status" id="scan-status">
           <div class="scan-symbol" aria-hidden="true">
@@ -1479,14 +2299,44 @@ function kioskHtml(): string {
             </svg>
           </div>
           <div>
-            <div class="status-title" id="status-title">Waiting for scan</div>
-            <div class="status-detail" id="status-detail">Hold the barcode under the scanner.</div>
+            <div class="status-title" id="status-title">Ready to scan</div>
+            <div class="status-detail" id="status-detail">Hold the barcode up to the scanner.</div>
           </div>
         </div>
 
         <div class="reason-grid" id="reasons">${reasons}</div>
+        <form class="student-form" id="student-form">
+          <div class="student-form-grid">
+            <div class="student-form-field">
+              <label for="new-first-name">First name</label>
+              <input id="new-first-name" name="firstName" autocomplete="given-name" required>
+            </div>
+            <div class="student-form-field">
+              <label for="new-last-name">Last name</label>
+              <input id="new-last-name" name="lastName" autocomplete="family-name" required>
+            </div>
+            <div class="student-form-field full">
+              <label for="new-grade">Grade</label>
+              <select id="new-grade" name="grade" required>
+                <option value="">Choose grade</option>
+                <option value="9">9th grade</option>
+                <option value="10">10th grade</option>
+                <option value="11">11th grade</option>
+                <option value="12">12th grade</option>
+              </select>
+            </div>
+          </div>
+          <div class="student-form-actions">
+            <button type="submit">Continue</button>
+          </div>
+        </form>
+        <form class="pairing-form" id="pairing-form">
+          <label for="pairing-pin">Pairing PIN</label>
+          <input id="pairing-pin" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{8}" maxlength="8" placeholder="00000000" required>
+          <button type="submit">Pair this Chromebook</button>
+          <div class="pairing-error" id="pairing-error" role="alert"></div>
+        </form>
         <button class="cancel" id="cancel" type="button">Cancel</button>
-        <div class="dev-tools"><button type="button" id="test-scan">Test scan 12345</button></div>
       </section>
     </main>
 
@@ -1508,6 +2358,13 @@ function kioskHtml(): string {
     const scanInput = document.getElementById('scan-input');
     const footerStatus = document.getElementById('footer-status');
     const screen = document.querySelector('.screen');
+    const studentForm = document.getElementById('student-form');
+    const pairingForm = document.getElementById('pairing-form');
+    const pairingPin = document.getElementById('pairing-pin');
+    const pairingError = document.getElementById('pairing-error');
+    const newFirstName = document.getElementById('new-first-name');
+    const newLastName = document.getElementById('new-last-name');
+    const newGrade = document.getElementById('new-grade');
 
     let currentBarcode = '';
     let currentFirstName = '';
@@ -1516,13 +2373,9 @@ function kioskHtml(): string {
     let resetTimer = null;
     let workingTimer = null;
     let reasonTimer = null;
+    let connectivityTimer = null;
     let busy = false;
-
-    const providedToken = new URLSearchParams(location.search).get('token');
-    if (providedToken) {
-      localStorage.setItem('libraryKioskToken', providedToken);
-      history.replaceState(null, '', location.pathname);
-    }
+    let checkingConnection = false;
 
     if (location.hostname === 'localhost' || location.search.includes('dev=1')) {
       document.body.dataset.dev = 'true';
@@ -1535,7 +2388,7 @@ function kioskHtml(): string {
 
     async function post(url, body) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
+      const timeout = setTimeout(() => controller.abort(), 8000);
       try {
         const response = await fetch(url, {
           method: 'POST',
@@ -1545,10 +2398,16 @@ function kioskHtml(): string {
           signal: controller.signal,
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || 'Request failed');
+        if (!response.ok) {
+          if (response.status === 401 && url !== '/api/library/kiosk-enroll') {
+            localStorage.removeItem('libraryKioskToken');
+          }
+          throw new Error(data.error || 'Request failed');
+        }
         return data;
       } catch (error) {
-        if (error && error.name === 'AbortError') throw new Error('Could not connect.');
+        if (!navigator.onLine) throw new Error('Network connection lost.');
+        if (error && error.name === 'AbortError') throw new Error('The request timed out. Try again.');
         throw error;
       } finally {
         clearTimeout(timeout);
@@ -1563,6 +2422,33 @@ function kioskHtml(): string {
       clearTimeout(resetTimer);
       clearTimeout(workingTimer);
       clearTimeout(reasonTimer);
+      clearTimeout(connectivityTimer);
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function resetReasonButtons() {
+      const grid = document.getElementById('reasons');
+      if (grid) delete grid.dataset.selecting;
+      document.querySelectorAll('.reason.selected').forEach((button) => button.classList.remove('selected'));
+    }
+
+    function markReasonSelected(button) {
+      resetReasonButtons();
+      const grid = document.getElementById('reasons');
+      if (grid) grid.dataset.selecting = 'true';
+      button.classList.add('selected');
+    }
+
+    function flashScanAccepted() {
+      delete document.body.dataset.scanFlash;
+      void document.body.offsetWidth;
+      document.body.dataset.scanFlash = 'true';
+      setTimeout(() => {
+        if (document.body.dataset.scanFlash === 'true') delete document.body.dataset.scanFlash;
+      }, 340);
     }
 
     function setCopy(next) {
@@ -1581,24 +2467,106 @@ function kioskHtml(): string {
     }
 
     function showIdle() {
+      if (!localStorage.getItem('libraryKioskToken') && location.hostname !== 'localhost') {
+        showPairing();
+        return;
+      }
       clearTimers();
       busy = false;
       currentBarcode = '';
       currentFirstName = '';
       keyBuffer = '';
       scanInput.value = '';
+      if (studentForm) studentForm.reset();
+      delete document.body.dataset.successType;
+      delete document.body.dataset.scanFlash;
+      resetReasonButtons();
       setStep('idle');
       setTone('idle');
       setCopy({
         eyebrow: 'Library Check-In',
-        headline: 'Welcome to the Library',
-        lead: 'Scan your student ID.',
-        statusTitle: 'Waiting for scan',
-        statusDetail: 'Hold the barcode under the scanner.',
+        headline: 'Scan your student ID.',
+        lead: 'Check in or check out.',
+        statusTitle: 'Ready to scan',
+        statusDetail: 'Hold the barcode up to the scanner.',
         hint: 'Need help? See the librarian.',
         footerStatus: 'Ready',
       });
       focusScanner();
+    }
+
+    function showPairing(message = '') {
+      clearTimers();
+      busy = false;
+      setStep('pairing');
+      setTone('idle');
+      pairingError.textContent = message;
+      setCopy({
+        eyebrow: 'Kiosk Setup',
+        headline: 'Pair this Chromebook',
+        lead: 'Ask the librarian for a pairing PIN.',
+        statusTitle: '',
+        statusDetail: '',
+        hint: 'The PIN expires after 10 minutes.',
+        footerStatus: 'Setup',
+      });
+      requestAnimationFrame(() => pairingPin.focus({ preventScroll: true }));
+    }
+
+    function showOffline(message = 'Check the Chromebook Wi-Fi connection.') {
+      clearTimers();
+      busy = true;
+      setStep('idle');
+      setTone('error');
+      setCopy({
+        eyebrow: 'Connection Problem',
+        headline: 'Kiosk offline',
+        lead: message,
+        statusTitle: 'Trying again',
+        statusDetail: 'The kiosk will reconnect automatically.',
+        hint: 'Check Wi-Fi if this message does not clear.',
+        footerStatus: 'Offline',
+      });
+      connectivityTimer = setTimeout(verifyKioskConnection, 5000);
+    }
+
+    async function verifyKioskConnection() {
+      if (checkingConnection) return;
+      if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+        showIdle();
+        return;
+      }
+      if (!localStorage.getItem('libraryKioskToken')) {
+        showPairing();
+        return;
+      }
+
+      checkingConnection = true;
+      busy = true;
+      footerStatus.textContent = 'Connecting';
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch('/api/library/kiosk-status', {
+          cache: 'no-store',
+          headers: authHeaders(),
+          signal: controller.signal,
+        });
+        if (response.status === 401) {
+          localStorage.removeItem('libraryKioskToken');
+          showPairing('This Chromebook needs to be paired again.');
+          return;
+        }
+        if (!response.ok) throw new Error('Kiosk service is unavailable.');
+        const data = await response.json().catch(() => null);
+        if (!data || data.ok !== true) throw new Error('Kiosk authentication could not be verified.');
+        showIdle();
+      } catch (error) {
+        showOffline(!navigator.onLine ? 'Check the Chromebook Wi-Fi connection.' : 'The library service is temporarily unavailable.');
+      } finally {
+        clearTimeout(timeout);
+        checkingConnection = false;
+      }
     }
 
     function showWorking() {
@@ -1615,21 +2583,23 @@ function kioskHtml(): string {
       });
     }
 
-    function showSuccess(title, detail, ms) {
+    function showSuccess(title, detail, ms, hintText, successType) {
       clearTimers();
       busy = false;
-      setStep('idle');
+      document.body.dataset.successType = successType || 'checkin';
+      delete document.body.dataset.scanFlash;
+      setStep('success');
       setTone('success');
       setCopy({
         eyebrow: 'Done',
         headline: title,
         lead: detail,
-        statusTitle: title,
-        statusDetail: detail,
-        hint: 'Ready for the next scan.',
+        statusTitle: '',
+        statusDetail: '',
+        hint: hintText || 'Ready for the next scan.',
         footerStatus: 'Ready',
       });
-      resetTimer = setTimeout(showIdle, ms || 850);
+      resetTimer = setTimeout(showIdle, ms || 900);
     }
 
     function showError(title, detail, ms) {
@@ -1649,9 +2619,31 @@ function kioskHtml(): string {
       resetTimer = setTimeout(showIdle, ms || 3000);
     }
 
+    function showNewStudent(barcode) {
+      clearTimeout(workingTimer);
+      busy = false;
+      resetReasonButtons();
+      delete document.body.dataset.successType;
+      currentBarcode = String(barcode || currentBarcode || '').trim();
+      setStep('new-student');
+      setTone('idle');
+      setCopy({
+        eyebrow: 'ID not found',
+        headline: 'Enter your information',
+        lead: 'This ID is not in the system yet.',
+        statusTitle: '',
+        statusDetail: '',
+        hint: 'This saves your ID for future visits.',
+        footerStatus: 'Continue',
+      });
+      reasonTimer = setTimeout(showIdle, 60000);
+      requestAnimationFrame(() => newFirstName && newFirstName.focus({ preventScroll: true }));
+    }
+
     function showReasons(student) {
       clearTimeout(workingTimer);
       busy = false;
+      resetReasonButtons();
       currentFirstName = student && student.firstName ? student.firstName : 'there';
       setStep('reasons');
       setTone('idle');
@@ -1669,6 +2661,7 @@ function kioskHtml(): string {
     }
 
     function focusScanner() {
+      if (document.body.dataset.step === 'new-student' || document.body.dataset.step === 'pairing') return;
       if (document.activeElement && document.activeElement.closest && document.activeElement.closest('button')) return;
       requestAnimationFrame(() => scanInput.focus({ preventScroll: true }));
     }
@@ -1688,7 +2681,8 @@ function kioskHtml(): string {
       busy = true;
       currentBarcode = scanned;
       footerStatus.textContent = 'Reading';
-      workingTimer = setTimeout(showWorking, 300);
+      flashScanAccepted();
+      workingTimer = setTimeout(showWorking, 240);
 
       try {
         const data = await post('/api/library/scan', { barcode: scanned });
@@ -1697,12 +2691,17 @@ function kioskHtml(): string {
         if (data.mode === 'checkout') {
           const firstName = data.student && data.student.firstName ? data.student.firstName : 'there';
           await post('/api/library/checkout', { barcode: scanned, method: 'scan_out' });
-          showSuccess('Checked out, ' + firstName, 'See you next time.', 800);
+          showSuccess('Checked out, ' + firstName, 'See you next time.', 850, 'Ready for the next scan.', 'checkout');
           return;
         }
 
         if (data.mode === 'checkin') {
           showReasons(data.student);
+          return;
+        }
+
+        if (data.mode === 'new_student') {
+          showNewStudent(data.barcode || scanned);
           return;
         }
 
@@ -1717,7 +2716,11 @@ function kioskHtml(): string {
 
     document.addEventListener('keydown', (event) => {
       if (event.ctrlKey || event.metaKey || event.altKey) return;
-      if (event.target && event.target.closest && event.target.closest('button')) return;
+      if (event.target && event.target.closest) {
+        if (event.target.closest('.pairing-form')) return;
+        if (event.target.closest('.student-form input, .student-form select, .student-form button')) return;
+        if (event.target.closest('button')) return;
+      }
 
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -1731,7 +2734,7 @@ function kioskHtml(): string {
         return;
       }
 
-      if (event.key && event.key.length === 1 && document.body.dataset.step !== 'reasons') {
+      if (event.key && event.key.length === 1 && document.body.dataset.step === 'idle') {
         keyBuffer += event.key;
         footerStatus.textContent = 'Reading';
         clearTimeout(keyTimer);
@@ -1742,7 +2745,7 @@ function kioskHtml(): string {
     }, true);
 
     scanInput.addEventListener('input', () => {
-      if (document.body.dataset.step === 'reasons') {
+      if (document.body.dataset.step === 'reasons' || document.body.dataset.step === 'new-student') {
         scanInput.value = '';
         return;
       }
@@ -1752,6 +2755,62 @@ function kioskHtml(): string {
 
     scanInput.addEventListener('change', finishBufferedScan);
 
+    pairingForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const pin = pairingPin.value.replace(/\D/g, '').slice(0, 8);
+      if (pin.length !== 8 || busy) return;
+      busy = true;
+      pairingError.textContent = '';
+      footerStatus.textContent = 'Pairing';
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch('/api/library/kiosk-enroll', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin, name: 'Library Chromebook' }),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Could not pair this Chromebook.');
+        localStorage.setItem('libraryKioskToken', data.token);
+        pairingForm.reset();
+        showSuccess('Chromebook paired', 'The kiosk is ready to use.', 1400, 'Ready for the first scan.', 'checkin');
+      } catch (error) {
+        busy = false;
+        pairingError.textContent = !navigator.onLine
+          ? 'Network connection lost.'
+          : error && error.name === 'AbortError'
+            ? 'Pairing timed out. Try again.'
+            : error instanceof Error ? error.message : 'Could not pair this Chromebook.';
+        footerStatus.textContent = 'Setup';
+        pairingPin.select();
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
+
+    studentForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (busy || !currentBarcode) return;
+      clearTimeout(reasonTimer);
+      busy = true;
+      footerStatus.textContent = 'Saving';
+      try {
+        const data = await post('/api/library/create-student', {
+          barcode: currentBarcode,
+          firstName: newFirstName.value,
+          lastName: newLastName.value,
+          grade: newGrade.value,
+        });
+        showReasons(data.student);
+      } catch (error) {
+        busy = false;
+        showError('Could not save', error instanceof Error ? error.message : 'Try again or see the librarian.', 3500);
+      }
+    });
+
     document.getElementById('reasons').addEventListener('click', async (event) => {
       const button = event.target.closest('button[data-reason]');
       if (!button || busy || !currentBarcode) return;
@@ -1759,8 +2818,15 @@ function kioskHtml(): string {
       busy = true;
       footerStatus.textContent = 'Checking in';
       try {
-        await post('/api/library/checkin', { barcode: currentBarcode, reason: button.dataset.reason });
-        showSuccess('Checked in, ' + currentFirstName, 'You are all set.', 850);
+        const reason = button.dataset.reason || '';
+        markReasonSelected(button);
+        await sleep(120);
+        await post('/api/library/checkin', { barcode: currentBarcode, reason });
+        if (reason === 'Lunch') {
+          showSuccess('Checked in, ' + currentFirstName, 'You are all set.', 900, 'Ready for the next scan.', 'checkin');
+        } else {
+          showSuccess('Checked in, ' + currentFirstName, 'Scan out when you leave.', 2300, 'Use the same ID to check out.', 'checkin');
+        }
       } catch (error) {
         showError('Could not check in', error instanceof Error ? error.message : 'Try again or see the librarian.');
       } finally {
@@ -1769,17 +2835,30 @@ function kioskHtml(): string {
     });
 
     document.getElementById('cancel').addEventListener('click', showIdle);
-    document.getElementById('test-scan').addEventListener('click', () => handleScan('12345'));
 
     document.addEventListener('pointerdown', (event) => {
-      if (event.target && event.target.closest && event.target.closest('button')) return;
+      if (event.target && event.target.closest) {
+        if (event.target.closest('.pairing-form')) return;
+        if (event.target.closest('.student-form input, .student-form select, .student-form button')) return;
+        if (event.target.closest('button')) return;
+      }
       setTimeout(focusScanner, 0);
     });
 
-    window.addEventListener('focus', focusScanner);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) focusScanner(); });
+    window.addEventListener('focus', () => {
+      if (document.body.dataset.step === 'idle' || document.body.dataset.step === 'pairing') verifyKioskConnection();
+      else focusScanner();
+    });
+    window.addEventListener('online', verifyKioskConnection);
+    window.addEventListener('offline', () => showOffline());
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        if (document.body.dataset.step === 'idle' || document.body.dataset.step === 'pairing') verifyKioskConnection();
+        else focusScanner();
+      }
+    });
 
-    showIdle();
+    verifyKioskConnection();
   </script>
 </body>
 </html>`;
@@ -1844,7 +2923,7 @@ function manageHtml(): string {
       margin: 0 auto;
       padding: 16px;
       display: grid;
-      grid-template-rows: 54px 66px minmax(0, 1fr);
+      grid-template-rows: 54px minmax(82px, 8.6vh) minmax(0, 1fr);
       gap: 12px;
       overflow: hidden;
     }
@@ -1938,15 +3017,16 @@ function manageHtml(): string {
     .statusbar {
       display: grid;
       grid-template-columns: 1.05fr 1fr .9fr 1.12fr;
+      min-height: 82px;
       overflow: hidden;
     }
 
     .stat {
       min-width: 0;
-      padding: 12px 16px;
+      padding: 14px 16px 13px;
       border-right: 1px solid var(--line);
       display: grid;
-      gap: 6px;
+      gap: 8px;
       align-content: center;
     }
 
@@ -1955,7 +3035,7 @@ function manageHtml(): string {
     .label {
       color: var(--muted);
       font-size: 11.5px;
-      line-height: 1;
+      line-height: 1.08;
       font-weight: 700;
       letter-spacing: .045em;
       text-transform: uppercase;
@@ -1963,8 +3043,8 @@ function manageHtml(): string {
 
     .value {
       min-width: 0;
-      font-size: 24px;
-      line-height: .98;
+      font-size: clamp(20px, 2.05vw, 26px);
+      line-height: 1.08;
       font-weight: 610;
       letter-spacing: -0.035em;
       white-space: nowrap;
@@ -2356,6 +3436,57 @@ function manageHtml(): string {
     .notice[data-tone="success"] { color: var(--green); }
     .notice[data-tone="error"] { color: var(--red); }
 
+    .kiosk-actions {
+      display: grid;
+      gap: 10px;
+    }
+
+    .pairing-card {
+      display: grid;
+      gap: 5px;
+      padding: 12px;
+      border: 1px solid rgba(17, 107, 67, .24);
+      border-radius: 12px;
+      background: var(--green-bg);
+      text-align: center;
+    }
+
+    .pairing-code {
+      color: var(--green);
+      font-size: 28px;
+      line-height: 1;
+      font-weight: 780;
+      letter-spacing: .12em;
+    }
+
+    .pairing-expiry,
+    .device-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.25;
+    }
+
+    .device-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    .device-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+    }
+
+    .device-name {
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .device-row[data-revoked="true"] { opacity: .58; }
+
     .savebar {
       align-self: end;
       display: grid;
@@ -2368,15 +3499,789 @@ function manageHtml(): string {
 
     .save-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 
+    /* v27 librarian dashboard polish */
+    .primary-stat {
+      background: linear-gradient(180deg, #fff, #fffafa);
+      border-left: 3px solid var(--maroon);
+    }
+
+    .primary-stat .value {
+      font-size: 27px;
+      font-weight: 720;
+      letter-spacing: -0.04em;
+    }
+
+    .capacity-meter {
+      width: 100%;
+      height: 6px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #eceff2;
+    }
+
+    .capacity-meter span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--maroon);
+      transition: width 180ms ease;
+    }
+
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 26px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1;
+      font-weight: 650;
+    }
+
+    .roster-table {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 36px minmax(0, 1fr);
+    }
+
+    .student-list {
+      height: auto;
+      min-height: 0;
+    }
+
+    .student-row {
+      min-height: 62px;
+      border-bottom-color: #edf0f3;
+    }
+
+    .student-name {
+      font-weight: 720;
+      font-size: 15.5px;
+    }
+
+    .student-id {
+      font-size: 12px;
+      color: var(--quiet);
+    }
+
+    .cell {
+      font-size: 13.5px;
+      font-weight: 560;
+    }
+
+    .student-row button.danger {
+      justify-self: end;
+      background: var(--red);
+    }
+
+    .empty {
+      height: 100%;
+      min-height: 260px;
+      display: grid;
+      place-items: end center;
+      padding: 0 24px 52px;
+      text-align: center;
+      background: linear-gradient(180deg, #fff, #fbfcfd);
+    }
+
+    .empty strong {
+      display: block;
+      color: var(--ink);
+      font-size: 15px;
+      line-height: 1.1;
+      font-weight: 650;
+      margin-bottom: 6px;
+    }
+
+    .empty span {
+      display: block;
+      color: var(--muted);
+      font-size: 13.5px;
+      line-height: 1.25;
+      font-weight: 450;
+    }
+
+    .settings-panel {
+      overflow: hidden;
+    }
+
+    .settings-panel .control-body {
+      overflow: auto;
+      grid-template-rows: none;
+      align-content: start;
+      padding: 12px;
+      gap: 11px;
+      background: #fbfcfd;
+    }
+
+    .settings-panel .group {
+      border: 0;
+      border-radius: 14px;
+      background: #fff;
+      box-shadow: 0 0 0 1px rgba(217, 222, 228, 0.7);
+      padding: 13px;
+      gap: 11px;
+    }
+
+    .settings-panel label,
+    .settings-panel .fake-label {
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.1;
+      font-weight: 630;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    .settings-panel h3 {
+      font-size: 15.5px;
+    }
+
+    .settings-panel .hint {
+      font-size: 12px;
+    }
+
+    .manual-status-control[data-disabled="true"] {
+      opacity: .56;
+    }
+
+    .manual-status-control[data-disabled="true"] .seg span {
+      cursor: not-allowed;
+    }
+
+    .mode-helper {
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.25;
+      font-weight: 450;
+    }
+
+    .manual-status-control[data-disabled="false"] .mode-helper {
+      display: none;
+    }
+
+    .savebar {
+      position: sticky;
+      bottom: 0;
+      z-index: 6;
+      margin: 2px -4px -4px;
+      border-color: var(--line-strong);
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: 0 -12px 28px rgba(23, 26, 31, 0.08);
+      backdrop-filter: blur(8px);
+    }
+
+    .save-meta {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tertiary {
+      min-height: 28px;
+      padding: 0 9px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .tertiary:hover {
+      background: var(--surface-soft);
+    }
+
+    /* v28 final Library Control polish */
+    .statusbar .stat {
+      padding-top: 14px;
+      padding-bottom: 14px;
+      gap: 8px;
+    }
+
+    .statusbar .value {
+      line-height: 1.08;
+    }
+
+    .primary-stat {
+      border-left: 0;
+      background: #fff;
+    }
+
+    .capacity-meter {
+      height: 5px;
+      background: #eef1f4;
+    }
+
+    .capacity-meter span {
+      background: #9aa3ad;
+    }
+
+    .capacity-meter span[data-empty="true"] {
+      opacity: 0;
+    }
+
+    .empty {
+      place-items: center;
+      padding: 24px;
+      min-height: 220px;
+    }
+
+    .save-meta {
+      grid-template-columns: 1fr;
+      align-items: start;
+      gap: 6px;
+    }
+
+    .tertiary {
+      justify-self: start;
+      min-height: 30px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--muted);
+    }
+
+    .tertiary:hover {
+      background: var(--surface-soft);
+      transform: none;
+    }
+
+    /* v29 settings simplification and fit fixes */
+    .settings-panel {
+      min-height: 0;
+    }
+
+    .settings-panel .control-body {
+      grid-auto-rows: max-content;
+      padding: 12px 12px 0;
+      gap: 10px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scrollbar-gutter: stable;
+    }
+
+    .settings-panel .group {
+      padding: 12px;
+      gap: 10px;
+    }
+
+    .capacity-group .field {
+      max-width: 150px;
+    }
+
+    .setting-helper {
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.3;
+      font-weight: 450;
+    }
+
+    .status-control {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+    }
+
+    .status-control span {
+      padding-left: 8px;
+      padding-right: 8px;
+      white-space: nowrap;
+    }
+
+    .manual-status-control[data-disabled="true"] .seg {
+      background: #f2f4f6;
+      box-shadow: inset 0 0 0 1px rgba(217, 222, 228, .65);
+    }
+
+    .manual-status-control[data-disabled="true"] .seg span {
+      color: var(--quiet);
+      background: transparent;
+      box-shadow: none;
+    }
+
+    .manual-status-control[data-disabled="true"] .seg input:checked + span {
+      background: #eef1f4;
+      color: var(--muted);
+    }
+
+    .tv-message-group textarea {
+      min-height: 54px;
+      max-height: 68px;
+    }
+
+    .savebar {
+      margin-top: 0;
+      margin-bottom: 0;
+      padding: 11px 12px calc(11px + env(safe-area-inset-bottom));
+      border-radius: 14px 14px 0 0;
+    }
+
+    .save-buttons {
+      grid-template-columns: minmax(0, 1fr) 92px;
+    }
+
+    .save-meta {
+      gap: 7px;
+    }
+
+    #sync.tertiary {
+      width: 100%;
+      justify-self: stretch;
+      min-height: 32px;
+    }
+
+
+
+    /* v30 status row fit */
+    .statusbar .value {
+      padding: 1px 0 2px;
+    }
+
+    .statusbar .stat {
+      overflow: hidden;
+    }
+
+    #mode,
+    #scheduled-summary,
+    #status {
+      line-height: 1.1;
+    }
+
+    .capacity-bar,
+    .capacity-progress,
+    .capacity-track {
+      margin-top: 2px;
+      flex: 0 0 auto;
+    }
+
+
+    /* v31 Library Control Apple-style polish */
+    .app {
+      padding: 18px;
+      gap: 14px;
+      grid-template-rows: 58px minmax(112px, 12vh) minmax(0, 1fr);
+    }
+
+    .topbar,
+    .statusbar,
+    .panel {
+      border-color: rgba(217, 222, 228, 0.78);
+      border-radius: 18px;
+      box-shadow: 0 12px 34px rgba(23, 26, 31, 0.07);
+    }
+
+    .topbar {
+      padding: 0 18px;
+    }
+
+    h1 {
+      font-size: 23px;
+      line-height: 1.08;
+      font-weight: 680;
+      letter-spacing: -0.035em;
+    }
+
+    .subtle {
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .danger:disabled,
+    #clear-all:disabled {
+      background: #eef1f4;
+      color: var(--quiet);
+      border: 1px solid var(--line);
+      box-shadow: none;
+      opacity: 1;
+    }
+
+    .statusbar {
+      min-height: 112px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.96);
+      overflow: visible;
+    }
+
+    .statusbar .stat {
+      min-height: 0;
+      padding: 18px 18px 16px;
+      gap: 9px;
+      align-content: center;
+      overflow: visible;
+      border-right-color: rgba(217, 222, 228, 0.72);
+    }
+
+    .statusbar .label {
+      color: var(--quiet);
+      font-size: 11px;
+      line-height: 1.18;
+      font-weight: 760;
+      letter-spacing: .055em;
+      text-transform: uppercase;
+    }
+
+    .statusbar .value {
+      display: block;
+      min-height: 0;
+      padding: 0;
+      overflow: visible;
+      font-size: clamp(22px, 2.1vw, 28px);
+      line-height: 1.18;
+      font-weight: 690;
+      letter-spacing: -0.035em;
+    }
+
+    .primary-stat .value {
+      font-size: clamp(27px, 2.65vw, 33px);
+      line-height: 1.14;
+      font-weight: 750;
+    }
+
+    .status-inline {
+      align-items: center;
+      gap: 11px;
+      line-height: 1.18;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+    }
+
+    .capacity-meter {
+      width: 100%;
+      height: 5px;
+      margin-top: 1px;
+      background: #edf0f3;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .capacity-meter span {
+      background: #8f98a3;
+    }
+
+    .capacity-meter span[data-empty="true"] {
+      opacity: 0;
+    }
+
+    .workspace {
+      gap: 14px;
+    }
+
+    .panel {
+      grid-template-rows: 58px minmax(0, 1fr);
+      background: rgba(255, 255, 255, 0.96);
+    }
+
+    .panel-title {
+      padding: 0 18px;
+      border-bottom-color: rgba(217, 222, 228, 0.66);
+      background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(250,251,252,.94));
+    }
+
+    h2 {
+      font-size: 16.5px;
+      line-height: 1.05;
+      font-weight: 670;
+      letter-spacing: -0.02em;
+    }
+
+    h3 {
+      font-size: 15.5px;
+      line-height: 1.1;
+      font-weight: 660;
+      letter-spacing: -0.012em;
+    }
+
+    .panel-note,
+    .hint,
+    .setting-helper,
+    .mode-helper {
+      color: var(--muted);
+      font-weight: 440;
+    }
+
+    .empty {
+      min-height: 100%;
+      place-items: center;
+      padding: 32px 24px;
+      background:
+        radial-gradient(circle at 50% 42%, rgba(116,31,39,.045), transparent 34%),
+        linear-gradient(180deg, #fff, #fbfcfd);
+    }
+
+    .empty > div {
+      display: grid;
+      justify-items: center;
+      gap: 5px;
+      text-align: center;
+    }
+
+    .empty > div::before {
+      content: "";
+      width: 44px;
+      height: 44px;
+      margin-bottom: 8px;
+      border-radius: 15px;
+      background: linear-gradient(180deg, #fff, #f2f4f6);
+      box-shadow: inset 0 0 0 1px rgba(197, 206, 216, .85), 0 10px 24px rgba(23, 26, 31, .06);
+    }
+
+    .empty strong {
+      font-size: 15.5px;
+      line-height: 1.15;
+      font-weight: 680;
+    }
+
+    .empty span {
+      max-width: 280px;
+      font-size: 13.5px;
+      line-height: 1.35;
+    }
+
+    .settings-panel {
+      display: grid;
+      grid-template-rows: 58px minmax(0, 1fr) auto;
+      overflow: hidden;
+      background: rgba(248, 249, 251, 0.98);
+    }
+
+    .settings-panel .control-body {
+      min-height: 0;
+      padding: 14px 14px 16px;
+      gap: 12px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      align-content: start;
+      background: transparent;
+      scrollbar-gutter: stable;
+    }
+
+    .settings-panel .group {
+      border: 0;
+      border-radius: 17px;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: inset 0 0 0 1px rgba(217, 222, 228, 0.68), 0 1px 2px rgba(23, 26, 31, 0.025);
+      padding: 16px;
+      gap: 12px;
+    }
+
+    .group-head {
+      align-items: center;
+    }
+
+    .settings-panel label,
+    .settings-panel .fake-label {
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.18;
+      font-weight: 560;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    input,
+    select,
+    textarea {
+      min-height: 38px;
+      border-color: rgba(197, 206, 216, 0.9);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, .98);
+    }
+
+    .seg {
+      border: 0;
+      border-radius: 13px;
+      background: #eef1f5;
+      padding: 3px;
+    }
+
+    .seg span {
+      min-height: 34px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 610;
+    }
+
+    .seg input:checked + span {
+      background: #fff;
+      box-shadow: 0 1px 5px rgba(23, 26, 31, .14);
+    }
+
+    .preset-row {
+      grid-template-columns: minmax(0, 1fr) 122px;
+      gap: 12px;
+    }
+
+    .tv-message-group textarea {
+      min-height: 60px;
+      max-height: 80px;
+    }
+
+    .savebar {
+      position: relative;
+      bottom: auto;
+      z-index: 6;
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 14px;
+      border: 0;
+      border-top: 1px solid rgba(217, 222, 228, 0.85);
+      border-radius: 0 0 18px 18px;
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: 0 -10px 24px rgba(23, 26, 31, 0.06);
+      backdrop-filter: blur(14px);
+    }
+
+    .save-buttons {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 96px;
+      gap: 10px;
+    }
+
+    .save-meta {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 7px;
+      align-items: start;
+    }
+
+    #sync.tertiary {
+      width: 100%;
+      min-height: 32px;
+      justify-self: stretch;
+      border: 1px solid rgba(217, 222, 228, 0.9);
+      border-radius: 11px;
+      background: rgba(255,255,255,.82);
+      color: var(--muted);
+      font-size: 12.5px;
+      font-weight: 610;
+    }
+
+    #sync.tertiary:hover {
+      background: #f6f7f8;
+      transform: none;
+    }
+
+
+    /* v32 quieter Sheets sync and capacity polish */
+    .capacity-group {
+      gap: 12px;
+    }
+
+    .capacity-group .field {
+      max-width: 170px;
+    }
+
+    .savebar {
+      gap: 8px;
+      padding: 13px 14px calc(13px + env(safe-area-inset-bottom));
+    }
+
+    .save-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 24px;
+    }
+
+    .save-meta .notice {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 18px;
+      font-size: 12.5px;
+      line-height: 1.25;
+    }
+
+    #sync.tertiary {
+      width: auto;
+      min-height: 28px;
+      justify-self: end;
+      flex: 0 0 auto;
+      padding: 0 6px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1;
+      font-weight: 560;
+      box-shadow: none;
+    }
+
+    #sync.tertiary:hover,
+    #sync.tertiary:focus-visible {
+      background: rgba(23, 26, 31, 0.045);
+      color: var(--ink);
+      transform: none;
+    }
+
+    #sync.tertiary:active {
+      transform: none;
+    }
+
+    /* v33 three-card status row */
+    .app {
+      grid-template-rows: 58px minmax(92px, 10vh) minmax(0, 1fr);
+    }
+
+    .statusbar {
+      grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr) minmax(0, 1.02fr);
+      min-height: 92px;
+    }
+
+    .statusbar .stat {
+      padding-top: 15px;
+      padding-bottom: 14px;
+      gap: 7px;
+    }
+
+    .tv-display-stack {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .status-subline {
+      margin-left: 21px;
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.2;
+      font-weight: 560;
+      letter-spacing: -0.005em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tv-display-stat .value {
+      line-height: 1.12;
+    }
+
     @media (max-height: 740px) and (min-width: 981px) {
-      .app { padding: 12px; grid-template-rows: 50px 60px minmax(0, 1fr); gap: 10px; }
-      .panel { grid-template-rows: 50px minmax(0, 1fr); }
-      .control-body { padding: 10px; gap: 8px; }
-      .group { padding: 10px; gap: 8px; }
+      .app { padding: 14px; grid-template-rows: 54px minmax(84px, 10vh) minmax(0, 1fr); gap: 12px; }
+      .topbar { min-height: 54px; }
+      .statusbar { min-height: 84px; }
+      .statusbar .stat { padding: 12px 16px; gap: 6px; }
+      .statusbar .value { font-size: clamp(19px, 1.85vw, 24px); line-height: 1.14; }
+      .primary-stat .value { font-size: clamp(23px, 2.2vw, 28px); }
+      .capacity-meter { height: 4px; }
+      .panel { grid-template-rows: 52px minmax(0, 1fr); }
+      .settings-panel { grid-template-rows: 52px minmax(0, 1fr) auto; }
+      .settings-panel .control-body { padding: 12px; gap: 10px; }
+      .settings-panel .group { padding: 13px; gap: 10px; }
       input, select { min-height: 34px; }
-      textarea { min-height: 42px; max-height: 42px; }
-      .student-row { min-height: 54px; }
-      .value { font-size: 22px; }
+      textarea { min-height: 44px; max-height: 58px; }
+      .student-row { min-height: 56px; }
+      .savebar { padding: 12px; }
     }
 
     @media (max-width: 980px) {
@@ -2385,6 +4290,7 @@ function manageHtml(): string {
       .title { display: block; }
       .subtle { margin-top: 5px; }
       .statusbar, .workspace { grid-template-columns: 1fr; }
+      .status-subline { margin-left: 21px; }
       .workspace { overflow: visible; }
       .panel { min-height: 360px; }
       .table-head { display: none; }
@@ -2392,6 +4298,66 @@ function manageHtml(): string {
       .student-row { grid-template-columns: 1fr; gap: 5px; padding: 12px 16px; }
       .row-label { display: block; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 2px; }
       .two, .two-even, .preset-row { grid-template-columns: 1fr; }
+    }
+
+    /* The status bar now lives inside the roster column, so the app has two rows. */
+    .app {
+      height: 100vh;
+      height: 100dvh;
+      min-height: 0;
+      grid-template-rows: 58px minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    .workspace {
+      min-height: 0;
+      height: 100%;
+      align-items: stretch;
+    }
+
+    .roster-stack {
+      min-height: 0;
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 14px;
+      overflow: hidden;
+    }
+
+    .roster-stack > .statusbar {
+      min-height: 98px;
+    }
+
+    .roster-panel,
+    .settings-panel {
+      min-height: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    @media (max-height: 740px) and (min-width: 981px) {
+      .app { grid-template-rows: 52px minmax(0, 1fr); }
+      .roster-stack { gap: 12px; }
+      .roster-stack > .statusbar { min-height: 88px; }
+    }
+
+    @media (max-width: 980px) {
+      .app {
+        height: auto;
+        min-height: 100vh;
+        overflow: auto;
+        grid-template-rows: auto auto;
+      }
+
+      .workspace,
+      .roster-stack,
+      .settings-panel {
+        height: auto;
+        overflow: visible;
+      }
+
+      .roster-stack { grid-template-rows: auto auto; }
+      .roster-stack > .statusbar { min-height: 0; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -2404,43 +4370,44 @@ function manageHtml(): string {
     <header class="topbar">
       <div class="title">
         <h1>Library control</h1>
-        <div class="subtle">Live roster, TV status, opening countdown.</div>
+        <div class="subtle">Manage check-ins, capacity, and the TV display.</div>
       </div>
       <div class="top-actions">
         <button class="secondary small" id="refresh" type="button" title="Reload the live roster and TV status without changing anything.">Refresh</button>
-        <button class="danger small" id="clear-all" type="button" title="Check out every student currently shown in the library roster. Use this at lunch change or end of day.">Clear all</button>
+        <button class="danger small" id="clear-all" type="button" title="Check out every student currently in the library. This cannot be undone." disabled>Check everyone out</button>
       </div>
     </header>
 
-    <section class="statusbar" aria-label="Current library status">
-      <div class="stat">
-        <div class="label">In library</div>
-        <div class="value" id="current">0 / 25</div>
-      </div>
-      <div class="stat">
-        <div class="label">TV status</div>
-        <div class="value"><span class="status-inline"><span class="dot" id="status-dot" data-status="closed"></span><span id="status">Closed</span></span></div>
-      </div>
-      <div class="stat">
-        <div class="label">Mode</div>
-        <div class="value" id="mode">Auto</div>
-      </div>
-      <div class="stat">
-        <div class="label">Scheduled open</div>
-        <div class="value" id="scheduled-summary">None</div>
-      </div>
-    </section>
-
     <main class="workspace">
-      <section class="panel">
+      <div class="roster-stack">
+  <section class="statusbar" aria-label="Current library status">
+        <div class="stat primary-stat">
+          <div class="label">In library</div>
+          <div class="value" id="current">0 / 25</div>
+          <div class="capacity-meter" aria-hidden="true"><span id="capacity-meter-fill"></span></div>
+        </div>
+        <div class="stat tv-display-stat">
+          <div class="label">TV display</div>
+          <div class="tv-display-stack">
+            <div class="value"><span class="status-inline"><span class="dot" id="status-dot" data-status="closed"></span><span id="status">Closed</span></span></div>
+            <div class="status-subline" id="mode">Automatic</div>
+          </div>
+        </div>
+        <div class="stat">
+          <div class="label">Scheduled open</div>
+          <div class="value" id="scheduled-summary">Not scheduled</div>
+        </div>
+      </section>
+
+      <section class="panel roster-panel">
         <div class="panel-title">
           <div>
             <h2>Current students</h2>
             <div class="panel-note" id="student-count-label">No students checked in</div>
           </div>
-          <button class="secondary small" id="refresh-list" type="button" title="Refresh the current student list.">Update</button>
+          <span class="live-pill" title="The roster refreshes automatically.">Updates live</span>
         </div>
-        <div>
+        <div class="roster-table">
           <div class="table-head" aria-hidden="true">
             <div>Student</div>
             <div>Grade</div>
@@ -2451,6 +4418,7 @@ function manageHtml(): string {
           <div class="student-list" id="students"><div class="empty">Loading...</div></div>
         </div>
       </section>
+      </div>
 
       <aside class="panel settings-panel">
         <div class="panel-title">
@@ -2460,81 +4428,81 @@ function manageHtml(): string {
           </div>
         </div>
         <div class="control-body">
-          <section class="group">
-            <div class="group-head"><h3>Capacity <span class="tip" tabindex="0" role="note" aria-label="Sets the active-student limit. In Auto mode, reaching this number can put the TV display at capacity." data-tooltip="Sets the active-student limit. In Auto mode, reaching this number can put the TV display at capacity.">?</span></h3><span class="hint" id="capacity-hint">0 spots available</span></div>
-            <div class="two">
-              <div class="field">
-                <label for="capacity">Cap <span class="tip" tabindex="0" role="note" aria-label="The maximum number of students allowed in the library at one time." data-tooltip="The maximum number of students allowed in the library at one time.">?</span></label>
-                <input id="capacity" type="number" min="1" max="500" inputmode="numeric">
-              </div>
-              <div class="field">
-                <div class="fake-label">Auto capacity <span class="tip" tabindex="0" role="note" aria-label="When on, the system changes the TV status to At Capacity when the live count reaches the cap." data-tooltip="When on, the system changes the TV status to At Capacity when the live count reaches the cap.">?</span></div>
-                <div class="seg" role="radiogroup" aria-label="Auto capacity">
-                  <label><input type="radio" name="auto-capacity" value="true"><span>On</span></label>
-                  <label><input type="radio" name="auto-capacity" value="false"><span>Off</span></label>
-                </div>
-              </div>
+          <section class="group capacity-group">
+            <div class="group-head"><h3>Capacity</h3><span class="hint" id="capacity-hint">0 spots available</span></div>
+            <div class="field">
+              <label for="capacity">Limit</label>
+              <input id="capacity" type="number" min="1" max="500" inputmode="numeric">
             </div>
           </section>
 
-          <section class="group">
-            <div class="group-head"><h3>Status <span class="tip" tabindex="0" role="note" aria-label="Controls what the cafeteria TV says: Open, At Capacity, or Closed." data-tooltip="Controls what the cafeteria TV says: Open, At Capacity, or Closed.">?</span></h3><span class="hint" id="status-hint">Auto mode</span></div>
+          <section class="group tv-display-group">
+            <div class="group-head"><h3>TV display</h3><span class="hint" id="status-hint">Automatic status control</span></div>
             <div class="field">
-              <div class="fake-label">Mode <span class="tip" tabindex="0" role="note" aria-label="Auto follows the live count and capacity. Manual uses the status you choose below." data-tooltip="Auto follows the live count and capacity. Manual uses the status you choose below.">?</span></div>
-              <div class="seg" role="radiogroup" aria-label="Status mode">
-                <label><input type="radio" name="status-mode" value="auto"><span>Auto</span></label>
-                <label><input type="radio" name="status-mode" value="manual"><span>Manual</span></label>
+              <div class="fake-label">Status control</div>
+              <div class="seg status-control" role="radiogroup" aria-label="Status control">
+                <label><input type="radio" name="status-mode" value="auto"><span>Automatic</span></label>
+                <label><input type="radio" name="status-mode" value="manual"><span>Manual override</span></label>
               </div>
+              <div class="setting-helper" id="status-mode-helper">The system shows Open, Full, or Closed based on the library rules.</div>
             </div>
-            <div class="field">
-              <div class="fake-label">Manual status <span class="tip" tabindex="0" role="note" aria-label="The TV status used when Mode is set to Manual." data-tooltip="The TV status used when Mode is set to Manual.">?</span></div>
-              <div class="seg three" role="radiogroup" aria-label="Manual status">
+            <div class="field manual-status-control" id="manual-status-field" data-disabled="false">
+              <div class="fake-label">TV status</div>
+              <div class="seg three" role="radiogroup" aria-label="TV status">
                 <label><input type="radio" name="manual-status" value="open"><span>Open</span></label>
                 <label><input type="radio" name="manual-status" value="capacity"><span>Full</span></label>
                 <label><input type="radio" name="manual-status" value="closed"><span>Closed</span></label>
               </div>
+              <div class="mode-helper" id="manual-status-helper">Manual TV status is disabled while Automatic mode is on.</div>
             </div>
           </section>
 
           <section class="group">
-            <div class="group-head"><h3>Opening countdown <span class="tip" tabindex="0" role="note" aria-label="Schedules a future opening time. The TV display can show a countdown until the library opens." data-tooltip="Schedules a future opening time. The TV display can show a countdown until the library opens.">?</span></h3><span class="hint" id="schedule-hint">No time set</span></div>
+            <div class="group-head"><h3>Opening time</h3><span class="hint" id="schedule-hint">No time set</span></div>
             <div class="preset-row">
               <div class="field">
-                <label for="preset">Saved time <span class="tip" tabindex="0" role="note" aria-label="Pick a previously saved opening time." data-tooltip="Pick a previously saved opening time.">?</span></label>
+                <label for="preset">Saved time</label>
                 <select id="preset"><option value="">Choose saved time</option></select>
               </div>
               <div class="field">
-                <label for="opening-time">Open at <span class="tip" tabindex="0" role="note" aria-label="Set the time the library should reopen today. Use this while the TV says Closed or At Capacity." data-tooltip="Set the time the library should reopen today. Use this while the TV says Closed or At Capacity.">?</span></label>
+                <label for="opening-time">Open at</label>
                 <input id="opening-time" type="time">
               </div>
             </div>
-            <label class="checkline" for="save-opening-time"><input id="save-opening-time" type="checkbox">Save this time for reuse <span class="tip" tabindex="0" role="note" aria-label="Adds the selected opening time to the saved-time list for future days." data-tooltip="Adds the selected opening time to the saved-time list for future days.">?</span></label>
+            <label class="checkline" for="save-opening-time"><input id="save-opening-time" type="checkbox">Save this time for reuse</label>
           </section>
 
-          <section class="group">
-            <div class="two-even">
-              <div class="field">
-                <div class="fake-label">TV count <span class="tip" tabindex="0" role="note" aria-label="Shows or hides the current count on the public TV display. Student names are never shown on the TV." data-tooltip="Shows or hides the current count on the public TV display. Student names are never shown on the TV.">?</span></div>
-                <div class="seg" role="radiogroup" aria-label="TV count">
-                  <label><input type="radio" name="show-count" value="false"><span>Hide</span></label>
-                  <label><input type="radio" name="show-count" value="true"><span>Show</span></label>
-                </div>
-              </div>
-              <div class="field">
-                <label for="message">TV message <span class="tip" tabindex="0" role="note" aria-label="Optional public note shown on the TV display, such as testing, lunch only, or see librarian." data-tooltip="Optional public note shown on the TV display, such as testing, lunch only, or see librarian.">?</span></label>
-                <textarea id="message" maxlength="180" placeholder="Optional"></textarea>
-              </div>
+          <section class="group tv-message-group">
+            <div class="field">
+              <label for="message">TV message</label>
+              <textarea id="message" maxlength="180" placeholder="Optional"></textarea>
             </div>
           </section>
 
-          <section class="savebar">
+          <section class="group kiosk-group">
+            <div class="group-head"><h3>Chromebook kiosk</h3><span class="hint">One-time pairing</span></div>
+            <div class="setting-helper">Generate a PIN, then enter it once on the kiosk. The PIN expires after 10 minutes.</div>
+            <div class="kiosk-actions">
+              <button class="secondary" id="generate-kiosk-pin" type="button">Generate pairing PIN</button>
+              <div class="pairing-card" id="pairing-card" hidden>
+                <div class="pairing-code" id="pairing-code"></div>
+                <div class="pairing-expiry" id="pairing-expiry"></div>
+              </div>
+              <div class="device-list" id="kiosk-devices"><div class="device-meta">Loading paired devices…</div></div>
+            </div>
+          </section>
+
+        </div>
+        <section class="savebar">
             <div class="save-buttons">
               <button id="save" type="button" title="Apply these settings and update the TV display.">Save changes</button>
-              <button class="secondary" id="sync" type="button" title="Retry any queued Google Sheets archive events.">Sync Sheets</button>
+              <button class="secondary" id="reset" type="button" title="Discard unsaved changes and reload the current settings.">Reset</button>
             </div>
-            <div class="notice" id="notice" role="status" aria-live="polite"></div>
-          </section>
-        </div>
+            <div class="save-meta">
+              <div class="notice" id="notice" role="status" aria-live="polite"></div>
+              <button class="tertiary" id="sync" type="button" title="Retry any queued Google Sheets archive events.">Sync Google Sheets</button>
+            </div>
+        </section>
       </aside>
     </main>
   </div>
@@ -2542,12 +4510,28 @@ function manageHtml(): string {
   <script>
     const $ = (id) => document.getElementById(id);
     const timeFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+    const dateTimeFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const manualRefreshCooldownMs = 5000;
+    let latestState = null;
+    let latestStudentCount = 0;
+    let refreshPromise = null;
+    let lastRefreshStartedAt = 0;
 
     async function api(url, options = {}) {
-      const response = await fetch(url, { cache: 'no-store', ...options });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || 'Request failed');
-      return body;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const response = await fetch(url, { cache: 'no-store', ...options, signal: controller.signal });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || 'Request failed');
+        return body;
+      } catch (error) {
+        if (!navigator.onLine) throw new Error('Network connection lost.');
+        if (error && error.name === 'AbortError') throw new Error('The request timed out. Try again.');
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
     }
 
     async function post(url, body) {
@@ -2568,6 +4552,22 @@ function manageHtml(): string {
       $('notice').dataset.tone = tone;
     }
 
+    function updateManualStatusAvailability(mode) {
+      const isManual = mode === 'manual';
+      const field = $('manual-status-field');
+      if (!field) return;
+      field.dataset.disabled = isManual ? 'false' : 'true';
+      document.querySelectorAll('input[name="manual-status"]').forEach((input) => {
+        input.disabled = !isManual;
+      });
+      const helper = $('status-mode-helper');
+      if (helper) {
+        helper.textContent = isManual
+          ? 'The librarian chooses what the TV shows.'
+          : 'The system shows Open, Full, or Closed based on the library rules.';
+      }
+    }
+
     function renderPresets(presets, selectedTime) {
       $('preset').innerHTML = '<option value="">Choose saved time</option>' + (presets || [])
         .map((item) => '<option value="' + escapeHtml(item.timeValue) + '">' + escapeHtml(item.label) + '</option>')
@@ -2576,7 +4576,7 @@ function manageHtml(): string {
     }
 
     function formatScheduled(summary) {
-      if (!summary) return 'None';
+      if (!summary) return 'Not scheduled';
       return summary.label || 'Scheduled';
     }
 
@@ -2585,22 +4585,27 @@ function manageHtml(): string {
       const cap = Number(state.capacity || 0);
       const available = Math.max(0, cap - count);
       const scheduledTime = state.scheduledOpen ? state.scheduledOpen.timeValue : '';
+      const progress = cap > 0 ? Math.min(100, Math.max(0, (count / cap) * 100)) : 0;
+      latestState = state;
+      latestStudentCount = Array.isArray(state.students) ? state.students.length : count;
+      $('clear-all').disabled = latestStudentCount < 1;
 
       $('current').textContent = count + ' / ' + cap;
+      $('capacity-meter-fill').style.width = progress + '%';
+      $('capacity-meter-fill').dataset.empty = progress <= 0 ? 'true' : 'false';
       $('capacity-hint').textContent = available === 1 ? '1 spot available' : available + ' spots available';
       $('status').textContent = state.statusLabel;
       $('status-dot').dataset.status = state.status;
-      $('mode').textContent = state.statusMode === 'manual' ? 'Manual' : 'Auto';
-      $('status-hint').textContent = state.statusMode === 'manual' ? 'Manual override' : 'Auto mode';
+      $('mode').textContent = state.statusMode === 'manual' ? 'Manual override' : 'Automatic';
+      $('status-hint').textContent = state.statusMode === 'manual' ? 'Manual override' : 'Automatic status control';
       $('scheduled-summary').textContent = formatScheduled(state.scheduledOpen);
       $('schedule-hint').textContent = state.scheduledOpen ? 'TV countdown active' : 'No time set';
 
       $('capacity').value = state.capacity;
       setChecked('status-mode', state.statusMode);
       setChecked('manual-status', state.manualStatus);
-      setChecked('show-count', String(state.showPublicCount !== false));
-      setChecked('auto-capacity', String(state.autoCapacityEnabled));
       $('message').value = state.customMessage || '';
+      updateManualStatusAvailability(state.statusMode);
       $('opening-time').value = scheduledTime;
       $('save-opening-time').checked = false;
       renderPresets(state.openingTimePresets || [], scheduledTime);
@@ -2608,7 +4613,7 @@ function manageHtml(): string {
       $('student-count-label').textContent = state.students.length === 1 ? '1 student checked in' : state.students.length + ' students checked in';
 
       if (!state.students.length) {
-        $('students').innerHTML = '<div class="empty">No students are currently checked in.</div>';
+        $('students').innerHTML = '<div class="empty"><div><strong>No students checked in</strong><span>Students will appear here as they scan in.</span></div></div>';
         return;
       }
 
@@ -2616,7 +4621,7 @@ function manageHtml(): string {
         const checkedIn = new Date(item.checkedInAt);
         const time = Number.isNaN(checkedIn.getTime()) ? 'Unknown' : timeFormatter.format(checkedIn);
         return '<div class="student-row">' +
-          '<div><div class="row-label">Student</div><div class="student-name">' + escapeHtml(item.firstName + ' ' + item.lastName) + '</div><div class="student-id">' + escapeHtml(item.studentId) + '</div></div>' +
+          '<div><div class="row-label">Student</div><div class="student-name">' + escapeHtml(item.firstName + ' ' + item.lastName) + '</div><div class="student-id">ID ' + escapeHtml(item.studentId) + '</div></div>' +
           '<div><div class="row-label">Grade</div><div class="cell">' + escapeHtml(item.grade || '') + '</div></div>' +
           '<div><div class="row-label">Reason</div><div class="cell">' + escapeHtml(item.reason) + '</div></div>' +
           '<div><div class="row-label">Time in</div><div class="cell muted">' + time + '</div></div>' +
@@ -2629,12 +4634,52 @@ function manageHtml(): string {
       return String(text).replace(/[&<>\"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
     }
 
-    async function refresh() {
+    async function loadKioskDevices() {
       try {
-        render(await api('/api/library/current'));
+        const data = await api('/api/library/kiosk-devices');
+        const devices = Array.isArray(data.devices) ? data.devices : [];
+        if (!devices.length) {
+          $('kiosk-devices').innerHTML = '<div class="device-meta">No Chromebooks paired yet.</div>';
+          return;
+        }
+        $('kiosk-devices').innerHTML = devices.map((device) => {
+          const lastSeen = device.lastSeenAt ? dateTimeFormatter.format(new Date(device.lastSeenAt)) : 'Never';
+          const revoked = Boolean(device.revokedAt);
+          return '<div class="device-row" data-revoked="' + String(revoked) + '">' +
+            '<div><div class="device-name">' + escapeHtml(device.name) + '</div><div class="device-meta">' + (revoked ? 'Revoked' : 'Last seen ' + escapeHtml(lastSeen)) + '</div></div>' +
+            (revoked ? '' : '<button class="danger small" type="button" data-revoke-device="' + device.id + '">Revoke</button>') +
+          '</div>';
+        }).join('');
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : 'Could not refresh.', 'error');
+        $('kiosk-devices').innerHTML = '<div class="device-meta">Could not load paired devices.</div>';
       }
+    }
+
+    function refresh(options = {}) {
+      const manual = options.manual === true;
+      const now = Date.now();
+
+      if (refreshPromise) return refreshPromise;
+      if (manual && now - lastRefreshStartedAt < manualRefreshCooldownMs) {
+        setNotice('Already up to date. Try again in a few seconds.');
+        return Promise.resolve();
+      }
+
+      lastRefreshStartedAt = now;
+      if (manual) $('refresh').disabled = true;
+      refreshPromise = (async () => {
+        try {
+          render(await api('/api/library/current'));
+          if (manual) await loadKioskDevices();
+          if (manual) setNotice('Dashboard refreshed.', 'success');
+        } catch (error) {
+          setNotice(error instanceof Error ? error.message : 'Could not refresh.', 'error');
+        } finally {
+          if (manual) $('refresh').disabled = false;
+          refreshPromise = null;
+        }
+      })();
+      return refreshPromise;
     }
 
     $('students').addEventListener('click', async (event) => {
@@ -2654,21 +4699,70 @@ function manageHtml(): string {
     });
 
     $('clear-all').addEventListener('click', async () => {
-      if (!confirm('Clear all current library check-ins?')) return;
-      setNotice('Clearing...');
+      const count = latestStudentCount || 0;
+      if (count < 1) return;
+      const message = count === 1 ? 'Check out this student?' : 'Check out all ' + count + ' students?';
+      if (!confirm(message)) return;
+      setNotice(count === 1 ? 'Checking out student...' : 'Checking everyone out...');
       try {
         const data = await post('/api/library/clear', { method: 'clear_all' });
-        setNotice('Cleared ' + data.cleared + ' check-ins.', 'success');
+        setNotice(data.cleared === 1 ? 'Checked out 1 student.' : 'Checked out ' + data.cleared + ' students.', 'success');
         await refresh();
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : 'Could not clear students.', 'error');
+        setNotice(error instanceof Error ? error.message : 'Could not check everyone out.', 'error');
       }
     });
 
-    $('refresh').addEventListener('click', refresh);
-    $('refresh-list').addEventListener('click', refresh);
+    $('refresh').addEventListener('click', () => refresh({ manual: true }));
+
+    $('generate-kiosk-pin').addEventListener('click', async () => {
+      const button = $('generate-kiosk-pin');
+      button.disabled = true;
+      setNotice('Generating pairing PIN...');
+      try {
+        const data = await post('/api/library/kiosk-pairing', {});
+        const pin = String(data.pin || '');
+        $('pairing-code').textContent = pin.slice(0, 4) + ' ' + pin.slice(4);
+        $('pairing-expiry').textContent = 'Expires ' + dateTimeFormatter.format(new Date(data.expiresAt));
+        $('pairing-card').hidden = false;
+        setNotice('Pairing PIN ready.', 'success');
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : 'Could not generate pairing PIN.', 'error');
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    $('kiosk-devices').addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-revoke-device]');
+      if (!button) return;
+      if (!confirm('Revoke this Chromebook? It will need to be paired again.')) return;
+      button.disabled = true;
+      try {
+        await post('/api/library/kiosk-revoke', { deviceId: Number(button.dataset.revokeDevice) });
+        $('pairing-card').hidden = true;
+        await loadKioskDevices();
+        setNotice('Chromebook revoked.', 'success');
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : 'Could not revoke Chromebook.', 'error');
+        button.disabled = false;
+      }
+    });
     $('preset').addEventListener('change', () => {
       if ($('preset').value) $('opening-time').value = $('preset').value;
+    });
+
+    document.querySelectorAll('input[name="status-mode"]').forEach((input) => {
+      input.addEventListener('change', () => updateManualStatusAvailability(checkedValue('status-mode')));
+    });
+
+    $('reset').addEventListener('click', () => {
+      if (latestState) {
+        render(latestState);
+        setNotice('Unsaved changes reset.');
+      } else {
+        refresh();
+      }
     });
 
     $('save').addEventListener('click', async () => {
@@ -2678,8 +4772,8 @@ function manageHtml(): string {
           capacity: Number($('capacity').value),
           statusMode: checkedValue('status-mode'),
           manualStatus: checkedValue('manual-status'),
-          showPublicCount: checkedValue('show-count') === 'true',
-          autoCapacityEnabled: checkedValue('auto-capacity') === 'true',
+          showPublicCount: true,
+          autoCapacityEnabled: true,
           customMessage: $('message').value,
           scheduledOpenTime: $('opening-time').value || null,
           saveOpeningTime: $('save-opening-time').checked,
@@ -2702,7 +4796,11 @@ function manageHtml(): string {
     });
 
     refresh();
-    setInterval(refresh, 10000);
+    loadKioskDevices();
+    setInterval(() => { if (!document.hidden) refresh(); }, 15000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) refresh();
+    });
   </script>
 </body>
 </html>`;
