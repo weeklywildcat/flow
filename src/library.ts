@@ -4406,6 +4406,212 @@ function manageHtml(pairing?: { pin: string; expiresAt: string }): string {
       overflow: hidden;
     }
 
+    /* Apple-inspired librarian control center */
+    :root {
+      --bg: #f5f5f7;
+      --surface: rgba(255, 255, 255, .88);
+      --surface-soft: #f5f5f7;
+      --ink: #1d1d1f;
+      --muted: #6e6e73;
+      --quiet: #86868b;
+      --line: rgba(0, 0, 0, .08);
+      --line-strong: rgba(0, 0, 0, .14);
+      --blue: #007aff;
+      --maroon: #007aff;
+      --red: #ff3b30;
+      --green: #248a3d;
+      --amber: #b25000;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .03), 0 14px 40px rgba(0, 0, 0, .07);
+      --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    }
+
+    body {
+      background:
+        radial-gradient(circle at 16% -10%, rgba(0, 122, 255, .08), transparent 28%),
+        radial-gradient(circle at 96% 0%, rgba(175, 82, 222, .05), transparent 25%),
+        var(--bg);
+    }
+
+    .app {
+      width: min(1440px, 100vw);
+      padding: 20px 22px 22px;
+      grid-template-rows: 64px minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .topbar {
+      padding: 0 4px;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      background: transparent;
+    }
+
+    .title {
+      display: grid;
+      gap: 5px;
+      align-items: center;
+    }
+
+    h1 {
+      font-size: 30px;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: -.035em;
+    }
+
+    .subtle {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--quiet);
+    }
+
+    button {
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 12px;
+      background: var(--blue);
+      font-size: 14px;
+      font-weight: 600;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, .05);
+      transition: transform 160ms ease, filter 160ms ease, opacity 160ms ease;
+    }
+
+    button:hover { transform: scale(1.015); filter: brightness(.98); }
+    button:active { transform: scale(.98); }
+    button.small { min-height: 36px; padding: 0 14px; }
+    button.secondary {
+      background: rgba(255, 255, 255, .72);
+      color: var(--blue);
+      border: 1px solid rgba(0, 0, 0, .09);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
+      backdrop-filter: blur(18px) saturate(150%);
+    }
+    button.danger { background: rgba(255, 59, 48, .1); color: #d70015; box-shadow: none; }
+
+    .workspace { grid-template-columns: minmax(0, 1fr) 420px; gap: 16px; }
+    .roster-stack { gap: 16px; }
+
+    .topbar,
+    .statusbar,
+    .panel {
+      border-color: var(--line);
+    }
+
+    .statusbar,
+    .panel {
+      border-radius: 22px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(24px) saturate(160%);
+    }
+
+    .statusbar {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      min-height: 110px;
+      padding: 8px;
+      gap: 6px;
+    }
+
+    .stat,
+    .primary-stat {
+      padding: 17px 18px;
+      border: 0;
+      border-radius: 16px;
+      background: transparent;
+      gap: 9px;
+    }
+
+    .primary-stat { background: rgba(0, 122, 255, .075); }
+    .primary-stat .value,
+    .value { font-size: 27px; font-weight: 700; letter-spacing: -.04em; }
+    .label { font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+    .capacity-meter { height: 5px; background: rgba(0, 122, 255, .12); }
+    .capacity-meter span { background: var(--blue); }
+
+    .panel { grid-template-rows: 72px minmax(0, 1fr); }
+    .settings-panel { grid-template-rows: 72px minmax(0, 1fr) auto; }
+    .panel-title {
+      padding: 0 20px;
+      border-bottom-color: var(--line);
+      background: transparent;
+    }
+    h2 { font-size: 19px; font-weight: 700; letter-spacing: -.025em; }
+    h3 { font-size: 15px; font-weight: 650; letter-spacing: -.015em; }
+    .panel-note { margin-top: 6px; color: var(--quiet); }
+    .live-pill { border: 0; background: rgba(52, 199, 89, .11); color: #1c7c36; }
+
+    .table-head {
+      height: 40px;
+      padding: 0 20px;
+      background: rgba(245, 245, 247, .8);
+      border-bottom-color: var(--line);
+      font-size: 11px;
+      letter-spacing: .02em;
+    }
+    .roster-table { grid-template-rows: 40px minmax(0, 1fr); }
+    .student-row { min-height: 66px; padding: 10px 20px; border-bottom-color: rgba(0, 0, 0, .055); }
+    .student-row:hover { background: rgba(0, 122, 255, .035); }
+    .student-name { font-size: 15px; font-weight: 650; }
+    .empty > div::before {
+      content: "✓";
+      display: grid;
+      place-items: center;
+      color: var(--blue);
+      font-size: 20px;
+      font-weight: 650;
+    }
+
+    .settings-panel .control-body {
+      padding: 14px;
+      gap: 12px;
+      background: transparent;
+      scrollbar-width: thin;
+    }
+
+    .settings-panel .group {
+      padding: 15px;
+      gap: 12px;
+      border: 0;
+      border-radius: 16px;
+      background: rgba(245, 245, 247, .9);
+      box-shadow: none;
+    }
+
+    .hint { color: var(--quiet); font-size: 12px; }
+    label,
+    .fake-label { color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+    input,
+    select,
+    textarea {
+      min-height: 42px;
+      border-color: rgba(0, 0, 0, .1);
+      border-radius: 11px;
+      background: rgba(255, 255, 255, .94);
+      font-size: 15px;
+      box-shadow: inset 0 1px 1px rgba(0, 0, 0, .025);
+    }
+    textarea { min-height: 64px; max-height: 64px; }
+    .seg { padding: 3px; gap: 2px; border: 0; border-radius: 11px; background: #e9e9ec; }
+    .seg span { min-height: 34px; border-radius: 9px; font-size: 13px; }
+    .seg input:checked + span { box-shadow: 0 1px 4px rgba(0, 0, 0, .14), 0 0 0 .5px rgba(0, 0, 0, .08); }
+    .checkline input { accent-color: var(--blue); }
+    .pairing-card { border: 0; border-radius: 14px; background: rgba(52, 199, 89, .11); }
+    .pairing-code { color: #1c7c36; font-variant-numeric: tabular-nums; }
+
+    .savebar {
+      margin: 0;
+      padding: 13px 14px 14px;
+      border: 0;
+      border-top: 1px solid var(--line);
+      border-radius: 0;
+      background: rgba(255, 255, 255, .82);
+      backdrop-filter: blur(22px) saturate(160%);
+    }
+    .save-buttons { grid-template-columns: 1.25fr .75fr; }
+    #save { min-height: 44px; }
+    #reset { color: var(--muted); }
+
     @media (max-height: 740px) and (min-width: 981px) {
       .app { grid-template-rows: 52px minmax(0, 1fr); }
       .roster-stack { gap: 12px; }
@@ -4440,8 +4646,8 @@ function manageHtml(pairing?: { pin: string; expiresAt: string }): string {
   <div class="app">
     <header class="topbar">
       <div class="title">
-        <h1>Library control</h1>
-        <div class="subtle">Manage check-ins, capacity, and the TV display.</div>
+        <h1>Library</h1>
+        <div class="subtle">Control Center</div>
       </div>
       <div class="top-actions">
         <button class="secondary small" id="refresh" type="button" title="Reload the live roster and TV status without changing anything.">Refresh</button>
@@ -4494,8 +4700,8 @@ function manageHtml(pairing?: { pin: string; expiresAt: string }): string {
       <aside class="panel settings-panel">
         <div class="panel-title">
           <div>
-            <h2>Settings</h2>
-            <div class="panel-note">Saved changes update the TV display.</div>
+            <h2>Controls</h2>
+            <div class="panel-note">Changes apply when you save.</div>
           </div>
         </div>
         <div class="control-body">
@@ -4508,7 +4714,7 @@ function manageHtml(pairing?: { pin: string; expiresAt: string }): string {
           </section>
 
           <section class="group tv-display-group">
-            <div class="group-head"><h3>TV display</h3><span class="hint" id="status-hint">Automatic status control</span></div>
+            <div class="group-head"><h3>Library status</h3><span class="hint" id="status-hint">Automatic status control</span></div>
             <div class="field">
               <div class="fake-label">Status control</div>
               <div class="seg status-control" role="radiogroup" aria-label="Status control">
@@ -4566,7 +4772,7 @@ function manageHtml(pairing?: { pin: string; expiresAt: string }): string {
         </div>
         <section class="savebar">
             <div class="save-buttons">
-              <button id="save" type="button" title="Apply these settings and update the TV display.">Save changes</button>
+              <button id="save" type="button" title="Apply these settings and update the TV display.">Apply changes</button>
               <button class="secondary" id="reset" type="button" title="Discard unsaved changes and reload the current settings.">Reset</button>
             </div>
             <div class="save-meta">
