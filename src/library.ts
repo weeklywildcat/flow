@@ -125,7 +125,11 @@ const HTML_HEADERS = {
 export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
-    const pathname = normalizePath(url.pathname);
+    let pathname = normalizePath(url.pathname);
+
+    if (pathname.startsWith("/library/manage/api/")) {
+      pathname = `/api/library/${pathname.slice("/library/manage/api/".length)}`;
+    }
 
     try {
       if (pathname.startsWith("/api/library/")) {
@@ -4636,7 +4640,7 @@ function manageHtml(): string {
 
     async function loadKioskDevices() {
       try {
-        const data = await api('/api/library/kiosk-devices');
+        const data = await api('/library/manage/api/kiosk-devices');
         const devices = Array.isArray(data.devices) ? data.devices : [];
         if (!devices.length) {
           $('kiosk-devices').innerHTML = '<div class="device-meta">No Chromebooks paired yet.</div>';
@@ -4669,7 +4673,7 @@ function manageHtml(): string {
       if (manual) $('refresh').disabled = true;
       refreshPromise = (async () => {
         try {
-          render(await api('/api/library/current'));
+          render(await api('/library/manage/api/current'));
           if (manual) await loadKioskDevices();
           if (manual) setNotice('Dashboard refreshed.', 'success');
         } catch (error) {
@@ -4688,7 +4692,7 @@ function manageHtml(): string {
       button.disabled = true;
       setNotice('Checking out...');
       try {
-        await post('/api/library/checkout', { visitId: Number(button.dataset.visit), method: 'librarian' });
+        await post('/library/manage/api/checkout', { visitId: Number(button.dataset.visit), method: 'librarian' });
         setNotice('Student checked out.', 'success');
         await refresh();
       } catch (error) {
@@ -4705,7 +4709,7 @@ function manageHtml(): string {
       if (!confirm(message)) return;
       setNotice(count === 1 ? 'Checking out student...' : 'Checking everyone out...');
       try {
-        const data = await post('/api/library/clear', { method: 'clear_all' });
+        const data = await post('/library/manage/api/clear', { method: 'clear_all' });
         setNotice(data.cleared === 1 ? 'Checked out 1 student.' : 'Checked out ' + data.cleared + ' students.', 'success');
         await refresh();
       } catch (error) {
@@ -4720,7 +4724,7 @@ function manageHtml(): string {
       button.disabled = true;
       setNotice('Generating pairing PIN...');
       try {
-        const data = await post('/api/library/kiosk-pairing', {});
+        const data = await post('/library/manage/api/kiosk-pairing', {});
         const pin = String(data.pin || '');
         $('pairing-code').textContent = pin.slice(0, 4) + ' ' + pin.slice(4);
         $('pairing-expiry').textContent = 'Expires ' + dateTimeFormatter.format(new Date(data.expiresAt));
@@ -4739,7 +4743,7 @@ function manageHtml(): string {
       if (!confirm('Revoke this Chromebook? It will need to be paired again.')) return;
       button.disabled = true;
       try {
-        await post('/api/library/kiosk-revoke', { deviceId: Number(button.dataset.revokeDevice) });
+        await post('/library/manage/api/kiosk-revoke', { deviceId: Number(button.dataset.revokeDevice) });
         $('pairing-card').hidden = true;
         await loadKioskDevices();
         setNotice('Chromebook revoked.', 'success');
@@ -4768,7 +4772,7 @@ function manageHtml(): string {
     $('save').addEventListener('click', async () => {
       setNotice('Saving...');
       try {
-        const data = await post('/api/library/settings', {
+        const data = await post('/library/manage/api/settings', {
           capacity: Number($('capacity').value),
           statusMode: checkedValue('status-mode'),
           manualStatus: checkedValue('manual-status'),
@@ -4788,7 +4792,7 @@ function manageHtml(): string {
     $('sync').addEventListener('click', async () => {
       setNotice('Syncing...');
       try {
-        const data = await post('/api/library/sync-sheets', {});
+        const data = await post('/library/manage/api/sync-sheets', {});
         setNotice('Sheets sync: ' + data.synced + ' synced, ' + data.failed + ' failed.', 'success');
       } catch (error) {
         setNotice(error instanceof Error ? error.message : 'Could not sync.', 'error');
