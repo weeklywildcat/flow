@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS library_opening_presets (
 CREATE TABLE IF NOT EXISTS library_kiosk_pairing_codes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   pin_hash TEXT NOT NULL UNIQUE,
+  device_name TEXT NOT NULL DEFAULT 'Unnamed Chromebook',
   expires_at TEXT NOT NULL,
   used_at TEXT,
   created_at TEXT NOT NULL,
