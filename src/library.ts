@@ -17,6 +17,7 @@ type KioskDeviceRow = {
 
 type KioskPairingRow = {
   id: number;
+  device_name: string;
   expires_at: string;
   used_at: string | null;
 };
@@ -157,8 +158,13 @@ export default {
         if (url.searchParams.get("pair") === "1" && !isStaffAuthorized(request)) {
           return json({ error: "Unauthorized." }, 401);
         }
-        const pairing = url.searchParams.get("pair") === "1"
-          ? await createKioskPairing(request, env)
+        const pairingRequested = url.searchParams.get("pair") === "1";
+        const deviceName = normalizeString(url.searchParams.get("name"), 80);
+        if (pairingRequested && !deviceName) {
+          return json({ error: "Enter a Chromebook name before generating a PIN." }, 400);
+        }
+        const pairing = pairingRequested
+          ? await createKioskPairing(request, env, deviceName)
           : undefined;
         return html(manageHtml(pairing));
       }
@@ -506,10 +512,13 @@ async function handleCreateStudent(request: Request, env: LibraryEnv, ctx: Execu
 }
 
 async function handleCreateKioskPairing(request: Request, env: LibraryEnv): Promise<Response> {
-  return json(await createKioskPairing(request, env));
+  const body = await readJsonBody(request);
+  const deviceName = isRecord(body) ? normalizeString(body.name, 80) : "";
+  if (!deviceName) return json({ error: "Enter a Chromebook name." }, 400);
+  return json(await createKioskPairing(request, env, deviceName));
 }
 
-async function createKioskPairing(request: Request, env: LibraryEnv): Promise<{ pin: string; expiresAt: string }> {
+async function createKioskPairing(request: Request, env: LibraryEnv, deviceName: string): Promise<{ pin: string; expiresAt: string; name: string }> {
   await ensureKioskPairingTables(env);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
@@ -521,12 +530,12 @@ async function createKioskPairing(request: Request, env: LibraryEnv): Promise<{ 
       "UPDATE library_kiosk_pairing_codes SET used_at = ? WHERE used_at IS NULL"
     ).bind(now.toISOString()),
     env.SIGNAGE_DB.prepare(
-      `INSERT INTO library_kiosk_pairing_codes (pin_hash, expires_at, created_at, created_by)
-       VALUES (?, ?, ?, ?)`
-    ).bind(pinHash, expiresAt, now.toISOString(), getActor(request)),
+      `INSERT INTO library_kiosk_pairing_codes (pin_hash, device_name, expires_at, created_at, created_by)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(pinHash, deviceName, expiresAt, now.toISOString(), getActor(request)),
   ]);
 
-  return { pin, expiresAt };
+  return { pin, expiresAt, name: deviceName };
 }
 
 async function handleKioskEnrollment(request: Request, env: LibraryEnv): Promise<Response> {
@@ -541,17 +550,17 @@ async function handleKioskEnrollment(request: Request, env: LibraryEnv): Promise
   if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
 
   const pin = typeof body.pin === "string" ? body.pin.replace(/\D/g, "").slice(0, 8) : "";
-  const name = normalizeString(body.name, 80) || "Library Chromebook";
   if (!/^\d{8}$/.test(pin)) return json({ error: "Enter the 8-digit pairing PIN." }, 400);
 
   const pinHash = await sha256Hex(pin);
   const now = new Date().toISOString();
   const pairing = await env.SIGNAGE_DB.prepare(
-    `SELECT id, expires_at, used_at
+    `SELECT id, device_name, expires_at, used_at
      FROM library_kiosk_pairing_codes
      WHERE pin_hash = ? AND used_at IS NULL AND expires_at > ?`
   ).bind(pinHash, now).first<KioskPairingRow>();
   if (!pairing) return json({ error: "That pairing PIN is invalid or expired." }, 401);
+  const name = pairing.device_name;
 
   const claimed = await env.SIGNAGE_DB.prepare(
     "UPDATE library_kiosk_pairing_codes SET used_at = ? WHERE id = ? AND used_at IS NULL"
@@ -577,6 +586,7 @@ async function ensureKioskPairingTables(env: LibraryEnv): Promise<void> {
       `CREATE TABLE IF NOT EXISTS library_kiosk_pairing_codes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         pin_hash TEXT NOT NULL UNIQUE,
+        device_name TEXT NOT NULL DEFAULT 'Unnamed Chromebook',
         expires_at TEXT NOT NULL,
         used_at TEXT,
         created_at TEXT NOT NULL,
@@ -600,6 +610,15 @@ async function ensureKioskPairingTables(env: LibraryEnv): Promise<void> {
       "CREATE INDEX IF NOT EXISTS idx_library_kiosk_devices_active ON library_kiosk_devices(revoked_at, last_seen_at)"
     ),
   ]);
+
+  const pairingColumns = await env.SIGNAGE_DB.prepare(
+    "PRAGMA table_info(library_kiosk_pairing_codes)"
+  ).all<{ name: string }>();
+  if (!pairingColumns.results.some((column) => column.name === "device_name")) {
+    await env.SIGNAGE_DB.prepare(
+      "ALTER TABLE library_kiosk_pairing_codes ADD COLUMN device_name TEXT NOT NULL DEFAULT 'Unnamed Chromebook'"
+    ).run();
+  }
 }
 
 async function handleKioskDevices(env: LibraryEnv): Promise<Response> {
@@ -2972,7 +2991,7 @@ function kioskHtml(): string {
         const response = await fetch('/api/library/kiosk-enroll', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pin, name: 'Library Chromebook' }),
+          body: JSON.stringify({ pin }),
           cache: 'no-store',
           signal: controller.signal,
         });
@@ -3073,7 +3092,7 @@ function kioskHtml(): string {
 </body>
 </html>`;
 }
-function manageHtml(pairing?: { pin: string; expiresAt: string }): string {
+function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }): string {
   const pairingCode = pairing ? `${pairing.pin.slice(0, 4)} ${pairing.pin.slice(4)}` : "";
   const pairingExpiry = pairing ? new Intl.DateTimeFormat("en-US", {
     timeZone: TIMEZONE,
@@ -4909,10 +4928,15 @@ function manageHtml(pairing?: { pin: string; expiresAt: string }): string {
 
           <section class="group kiosk-group">
             <div class="group-head"><h3>Chromebook kiosk</h3><span class="hint">One-time pairing</span></div>
-            <div class="setting-helper">Generate a PIN, then enter it once on the kiosk. The PIN expires after 10 minutes.</div>
+            <div class="setting-helper">Name this Chromebook, generate a PIN, then enter it once on the kiosk. The PIN expires after 10 minutes.</div>
             <div class="kiosk-actions">
+              <div class="field">
+                <label for="kiosk-name">Chromebook name</label>
+                <input id="kiosk-name" maxlength="80" placeholder="Example: Front desk Chromebook" value="${pairing ? escapeAttr(pairing.name) : ""}">
+              </div>
               <button class="secondary" id="generate-kiosk-pin" type="button">Generate pairing PIN</button>
               <div class="pairing-card" id="pairing-card"${pairing ? "" : " hidden"}>
+                <div class="device-name">${pairing ? escapeHtml(pairing.name) : ""}</div>
                 <div class="pairing-code" id="pairing-code">${escapeHtml(pairingCode)}</div>
                 <div class="pairing-expiry" id="pairing-expiry">${pairing ? `Expires ${escapeHtml(pairingExpiry)}` : ""}</div>
               </div>
@@ -5149,9 +5173,15 @@ function manageHtml(pairing?: { pin: string; expiresAt: string }): string {
 
     $('generate-kiosk-pin').addEventListener('click', () => {
       const button = $('generate-kiosk-pin');
+      const name = $('kiosk-name').value.trim();
+      if (!name) {
+        setNotice('Enter a name for this Chromebook.', 'error');
+        $('kiosk-name').focus();
+        return;
+      }
       button.disabled = true;
       setNotice('Generating pairing PIN...');
-      window.location.assign('/library/manage?pair=1&t=' + Date.now());
+      window.location.assign('/library/manage?pair=1&name=' + encodeURIComponent(name) + '&t=' + Date.now());
     });
 
     $('kiosk-devices').addEventListener('click', async (event) => {
