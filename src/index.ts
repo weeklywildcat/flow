@@ -1,3 +1,5 @@
+import libraryApp from "./library";
+
 type Status = "open" | "capacity" | "closed";
 
 type StoredStatusRow = {
@@ -90,11 +92,20 @@ const HTML_HEADERS = {
 };
 
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
     const pathname = normalizePath(url.pathname);
 
     try {
+      if (
+        pathname === "/library" ||
+        pathname.startsWith("/library/") ||
+        pathname.startsWith("/api/library/") ||
+        pathname === "/api/signage/library"
+      ) {
+        return libraryApp.fetch(request, env, ctx);
+      }
+
       if (pathname === "/view") {
         return request.method === "GET" ? html(viewHtml(), 200) : methodNotAllowed(["GET"]);
       }
