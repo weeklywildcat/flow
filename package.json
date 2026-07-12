@@ -8,7 +8,8 @@
     "deploy": "npx wrangler deploy"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260708.1",
     "typescript": "^5.8.3",
-    "wrangler": "^4.107.0"
+    "wrangler": "^4.110.0"
   }
 }
