@@ -251,18 +251,12 @@ async function handleScan(request: Request, env: LibraryEnv): Promise<Response> 
 
   const activeVisit = await findActiveVisitForStudent(env, student.id);
   const state = await getCurrentState(env, false);
+  const warning = state.status === "closed"
+    ? "The library is marked closed. Your visit can still be recorded."
+    : undefined;
 
   if (activeVisit) {
-    return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(activeVisit), state });
-  }
-
-  if (state.status === "closed") {
-    return json({
-      mode: "closed",
-      student: publicStudent(student),
-      state,
-      error: "The library is currently closed.",
-    }, 409);
+    return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(activeVisit), state, warning });
   }
 
   if (state.status === "capacity") {
@@ -274,7 +268,7 @@ async function handleScan(request: Request, env: LibraryEnv): Promise<Response> 
     }, 409);
   }
 
-  return json({ mode: "checkin", student: publicStudent(student), reasons: REASONS, state });
+  return json({ mode: "checkin", student: publicStudent(student), reasons: REASONS, state, warning });
 }
 
 async function handleCheckin(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
@@ -296,9 +290,6 @@ async function handleCheckin(request: Request, env: LibraryEnv, ctx: ExecutionCo
   }
 
   const stateBefore = await getCurrentState(env, false);
-  if (stateBefore.status === "closed") {
-    return json({ error: "The library is currently closed." }, 409);
-  }
   if (stateBefore.status === "capacity") {
     return json({ error: "The library is currently at capacity." }, 409);
   }
@@ -327,7 +318,14 @@ async function handleCheckin(request: Request, env: LibraryEnv, ctx: ExecutionCo
 
   await safeSyncSignageStatus(env, "Library check-in system");
 
-  return json({ ok: true, visit: visitPayload(visit), state: await getCurrentState(env, true) });
+  return json({
+    ok: true,
+    visit: visitPayload(visit),
+    warning: stateBefore.status === "closed"
+      ? "The library is marked closed. Your check-in was still recorded."
+      : undefined,
+    state: await getCurrentState(env, true),
+  });
 }
 
 async function handleCheckout(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
@@ -2419,6 +2417,7 @@ function kioskHtml(): string {
 
     let currentBarcode = '';
     let currentFirstName = '';
+    let currentCheckinWarning = '';
     let keyBuffer = '';
     let keyTimer = null;
     let resetTimer = null;
@@ -2691,21 +2690,22 @@ function kioskHtml(): string {
       requestAnimationFrame(() => newFirstName && newFirstName.focus({ preventScroll: true }));
     }
 
-    function showReasons(student) {
+    function showReasons(student, warning) {
       clearTimeout(workingTimer);
       busy = false;
       resetReasonButtons();
       currentFirstName = student && student.firstName ? student.firstName : 'there';
+      currentCheckinWarning = warning || '';
       setStep('reasons');
-      setTone('idle');
+      setTone(currentCheckinWarning ? 'error' : 'idle');
       setCopy({
         eyebrow: 'Check-In',
         headline: 'Welcome, ' + currentFirstName,
-        lead: 'What brings you in?',
+        lead: currentCheckinWarning || 'What brings you in?',
         statusTitle: '',
         statusDetail: '',
-        hint: 'Tap one reason.',
-        footerStatus: 'Choose',
+        hint: currentCheckinWarning ? 'You can still check in. Choose a reason.' : 'Tap one reason.',
+        footerStatus: currentCheckinWarning ? 'Closed — check-in allowed' : 'Choose',
       });
       reasonTimer = setTimeout(showIdle, 20000);
       focusScanner();
@@ -2742,12 +2742,18 @@ function kioskHtml(): string {
         if (data.mode === 'checkout') {
           const firstName = data.student && data.student.firstName ? data.student.firstName : 'there';
           await post('/api/library/checkout', { barcode: scanned, method: 'scan_out' });
-          showSuccess('Checked out, ' + firstName, 'See you next time.', 850, 'Ready for the next scan.', 'checkout');
+          showSuccess(
+            'Checked out, ' + firstName,
+            data.warning ? 'The library is marked closed. Your checkout was recorded.' : 'See you next time.',
+            data.warning ? 2600 : 850,
+            'Ready for the next scan.',
+            'checkout'
+          );
           return;
         }
 
         if (data.mode === 'checkin') {
-          showReasons(data.student);
+          showReasons(data.student, data.warning);
           return;
         }
 
@@ -2855,7 +2861,9 @@ function kioskHtml(): string {
           lastName: newLastName.value,
           grade: newGrade.value,
         });
-        showReasons(data.student);
+        showReasons(data.student, data.state && data.state.status === 'closed'
+          ? 'The library is marked closed. Your visit can still be recorded.'
+          : '');
       } catch (error) {
         busy = false;
         showError('Could not save', error instanceof Error ? error.message : 'Try again or see the librarian.', 3500);
@@ -2872,7 +2880,11 @@ function kioskHtml(): string {
         const reason = button.dataset.reason || '';
         markReasonSelected(button);
         await sleep(120);
-        await post('/api/library/checkin', { barcode: currentBarcode, reason });
+        const result = await post('/api/library/checkin', { barcode: currentBarcode, reason });
+        if (result.warning) {
+          showSuccess('Checked in, ' + currentFirstName, result.warning, 2800, 'Please check with the librarian.', 'checkin');
+          return;
+        }
         if (reason === 'Lunch') {
           showSuccess('Checked in, ' + currentFirstName, 'You are all set.', 900, 'Ready for the next scan.', 'checkin');
         } else {
