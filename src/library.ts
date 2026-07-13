@@ -1,3 +1,14 @@
+import {
+  deleteAutopilotPreset,
+  ensureAutopilotSchema,
+  evaluateAutopilot,
+  listAutopilotPresets,
+  saveAutopilotPreset,
+  setAutopilotRunState,
+  startAutopilot,
+  validateWindows,
+} from "./autopilot";
+
 type LibraryStatus = "open" | "capacity" | "closed";
 type StatusMode = "auto" | "manual";
 type CheckoutMethod = "scan_out" | "librarian" | "clear_all" | "auto_end_of_day";
@@ -203,6 +214,26 @@ export default {
 
       if (pathname === "/api/library/kiosk-revoke") {
         return request.method === "POST" ? handleKioskRevoke(request, env) : methodNotAllowed(["POST"]);
+      }
+
+      if (pathname === "/api/library/autopilot") {
+        return request.method === "GET" ? handleAutopilotState(env) : methodNotAllowed(["GET"]);
+      }
+
+      if (pathname === "/api/library/autopilot-preset") {
+        return request.method === "POST" ? handleAutopilotPreset(request, env) : methodNotAllowed(["POST"]);
+      }
+
+      if (pathname === "/api/library/autopilot-delete") {
+        return request.method === "POST" ? handleAutopilotDelete(request, env) : methodNotAllowed(["POST"]);
+      }
+
+      if (pathname === "/api/library/autopilot-start") {
+        return request.method === "POST" ? handleAutopilotStart(request, env) : methodNotAllowed(["POST"]);
+      }
+
+      if (pathname === "/api/library/autopilot-state") {
+        return request.method === "POST" ? handleAutopilotRunState(request, env) : methodNotAllowed(["POST"]);
       }
 
       if (pathname === "/api/library/clear") {
@@ -423,6 +454,14 @@ async function handleSettings(request: Request, env: LibraryEnv, ctx: ExecutionC
     return json({ error: "Choose an opening time before saving it." }, 400);
   }
 
+  const currentScheduledOpen = await getScheduledOpen(env, nowDate);
+  const autopilotBefore = await evaluateAutopilot(env, nowDate, await getActiveCount(env), current.capacity);
+  const statusControlsChanged = statusMode !== current.status_mode || manualStatus !== current.manual_status;
+  const quickScheduleChanged = (scheduledOpen?.timeValue ?? null) !== (currentScheduledOpen?.timeValue ?? null);
+  if (autopilotBefore.status === "running" && (statusControlsChanged || quickScheduleChanged)) {
+    await setAutopilotRunState(env, "paused", getActor(request), nowDate);
+  }
+
   await env.SIGNAGE_DB.prepare(
     `UPDATE library_settings
      SET status_mode = ?, manual_status = ?, capacity = ?, custom_message = ?, show_public_count = ?, auto_capacity_enabled = ?, updated_at = ?, updated_by = ?
@@ -637,6 +676,68 @@ async function handleKioskRevoke(request: Request, env: LibraryEnv): Promise<Res
   return json({ ok: true });
 }
 
+async function handleAutopilotState(env: LibraryEnv): Promise<Response> {
+  await ensureAutopilotSchema(env);
+  const settings = await getSettings(env);
+  const count = await getActiveCount(env);
+  return json({
+    presets: await listAutopilotPresets(env),
+    run: await evaluateAutopilot(env, new Date(), count, settings.capacity),
+  });
+}
+
+async function handleAutopilotPreset(request: Request, env: LibraryEnv): Promise<Response> {
+  await ensureAutopilotSchema(env);
+  const body = await readJsonBody(request);
+  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
+  const name = normalizeString(body.name, 80);
+  if (!name) return json({ error: "Enter a preset name." }, 400);
+  const id = Number(body.id);
+  const presetId = Number.isInteger(id) && id > 0 ? id : null;
+  try {
+    const windows = validateWindows(body.windows);
+    const savedId = await saveAutopilotPreset(env, presetId, name, windows, getActor(request));
+    return json({ ok: true, id: savedId });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not save Autopilot preset.";
+    return json({ error: message.includes("UNIQUE") ? "Preset names must be unique." : message }, 400);
+  }
+}
+
+async function handleAutopilotDelete(request: Request, env: LibraryEnv): Promise<Response> {
+  await ensureAutopilotSchema(env);
+  const body = await readJsonBody(request);
+  const presetId = isRecord(body) ? Number(body.presetId) : NaN;
+  if (!Number.isInteger(presetId) || presetId < 1) return json({ error: "Choose a preset to delete." }, 400);
+  await deleteAutopilotPreset(env, presetId);
+  return json({ ok: true });
+}
+
+async function handleAutopilotStart(request: Request, env: LibraryEnv): Promise<Response> {
+  await ensureAutopilotSchema(env);
+  const body = await readJsonBody(request);
+  const presetId = isRecord(body) ? Number(body.presetId) : NaN;
+  if (!Number.isInteger(presetId) || presetId < 1) return json({ error: "Choose an Autopilot preset." }, 400);
+  await startAutopilot(env, presetId, getActor(request));
+  await safeSyncSignageStatus(env, getActor(request));
+  return handleAutopilotState(env);
+}
+
+async function handleAutopilotRunState(request: Request, env: LibraryEnv): Promise<Response> {
+  await ensureAutopilotSchema(env);
+  const body = await readJsonBody(request);
+  const action = isRecord(body) && typeof body.action === "string" ? body.action : "";
+  const state = action === "resume" ? "active" : action === "pause" ? "paused" : action === "stop" ? "stopped" : null;
+  if (!state) return json({ error: "Invalid Autopilot action." }, 400);
+  try {
+    await setAutopilotRunState(env, state, getActor(request));
+    await safeSyncSignageStatus(env, getActor(request));
+    return handleAutopilotState(env);
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : "Could not update Autopilot." }, 400);
+  }
+}
+
 function publicKioskDevice(row: KioskDeviceRow) {
   return {
     id: row.id,
@@ -766,9 +867,14 @@ async function checkoutVisit(env: LibraryEnv, visitId: number, method: CheckoutM
 async function getCurrentState(env: LibraryEnv, includeStudents: boolean) {
   const settings = await getSettings(env);
   const currentCount = await getActiveCount(env);
-  const status = resolveEffectiveLibraryStatus(settings, currentCount);
   const activeVisits = includeStudents ? await getActiveVisits(env) : [];
   const now = new Date();
+  const autopilot = await evaluateAutopilot(env, now, currentCount, settings.capacity);
+  const status = autopilot.effectiveStatus ?? resolveBaseLibraryStatus(settings, currentCount);
+  const autopilotScheduledOpen: ScheduledOpen | null = !autopilot.currentWindow && autopilot.nextOpenAt && autopilot.nextWindow
+    ? { opensAt: autopilot.nextOpenAt, timeValue: autopilot.nextWindow.start, label: formatTimeValue(autopilot.nextWindow.start) }
+    : null;
+  const legacyScheduledOpen = await getScheduledOpen(env, now);
 
   return {
     status,
@@ -780,7 +886,8 @@ async function getCurrentState(env: LibraryEnv, includeStudents: boolean) {
     customMessage: settings.custom_message ?? "",
     showPublicCount: true,
     autoCapacityEnabled: true,
-    scheduledOpen: await getScheduledOpen(env, now),
+    scheduledOpen: autopilot.status === "running" ? autopilotScheduledOpen : autopilot.status === "finished" ? null : legacyScheduledOpen,
+    autopilot,
     openingTimePresets: await getOpeningTimePresets(env),
     updatedAt: settings.updated_at,
     updatedBy: settings.updated_by,
@@ -790,7 +897,7 @@ async function getCurrentState(env: LibraryEnv, includeStudents: boolean) {
   };
 }
 
-async function getPublicSignageStatus(env: LibraryEnv) {
+export async function getPublicSignageStatus(env: LibraryEnv) {
   const state = await getCurrentState(env, false);
   return {
     status: state.status,
@@ -799,6 +906,8 @@ async function getPublicSignageStatus(env: LibraryEnv) {
     capacity: state.capacity,
     message: state.customMessage,
     scheduledOpen: state.scheduledOpen,
+    updatedAt: state.updatedAt,
+    updatedBy: state.updatedBy,
     timezone: TIMEZONE,
     generatedAt: state.generatedAt,
   };
@@ -807,7 +916,8 @@ async function getPublicSignageStatus(env: LibraryEnv) {
 async function syncSignageStatus(env: LibraryEnv, actor: string): Promise<void> {
   const settings = await getSettings(env);
   const count = await getActiveCount(env);
-  const status = resolveEffectiveLibraryStatus(settings, count);
+  const autopilot = await evaluateAutopilot(env, new Date(), count, settings.capacity);
+  const status = autopilot.effectiveStatus ?? resolveBaseLibraryStatus(settings, count);
   const message = settings.custom_message ?? "";
   const updatedAt = new Date().toISOString();
 
@@ -836,7 +946,7 @@ async function safeSyncSignageStatus(env: LibraryEnv, actor: string): Promise<vo
   }
 }
 
-function resolveEffectiveLibraryStatus(settings: SettingsRow, currentCount: number): LibraryStatus {
+function resolveBaseLibraryStatus(settings: SettingsRow, currentCount: number): LibraryStatus {
   if (settings.status_mode === "manual") {
     return isLibraryStatus(settings.manual_status) ? settings.manual_status : "closed";
   }
@@ -4745,6 +4855,27 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
     .pairing-card { border: 0; border-radius: 14px; background: rgba(52, 199, 89, .11); }
     .pairing-code { color: #1c7c36; font-variant-numeric: tabular-nums; }
 
+    .autopilot-status {
+      min-height: 24px;
+      padding: 0 9px;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, .06);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .autopilot-status[data-state="running"] { background: rgba(52, 199, 89, .12); color: #1c7c36; }
+    .autopilot-status[data-state="paused"] { background: rgba(255, 159, 10, .14); color: #8a5100; }
+    .autopilot-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .autopilot-summary { color: var(--muted); font-size: 13px; line-height: 1.35; }
+    .autopilot-editor { display: grid; gap: 10px; padding-top: 11px; border-top: 1px solid var(--line); }
+    .autopilot-windows { display: grid; gap: 8px; }
+    .autopilot-window { display: grid; grid-template-columns: 1fr 1fr 34px; gap: 7px; align-items: end; }
+    .autopilot-window button { min-height: 42px; padding: 0; background: rgba(255, 59, 48, .1); color: #d70015; box-shadow: none; }
+    .autopilot-editor-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
     .savebar {
       margin: 0;
       padding: 13px 14px 14px;
@@ -4884,6 +5015,31 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
             </div>
           </section>
 
+          <section class="group autopilot-group">
+            <div class="group-head"><h3>Autopilot</h3><span class="autopilot-status" id="autopilot-status" data-state="off">Off</span></div>
+            <div class="setting-helper">Run a saved set of opening windows for today. The library closes automatically between windows.</div>
+            <div class="field">
+              <label for="autopilot-preset">Day preset</label>
+              <select id="autopilot-preset"><option value="">Choose a preset</option></select>
+            </div>
+            <div class="autopilot-actions">
+              <button id="autopilot-start" type="button">Turn on Autopilot</button>
+              <button class="secondary" id="autopilot-pause" type="button" hidden>Pause</button>
+              <button id="autopilot-resume" type="button" hidden>Resume</button>
+              <button class="secondary" id="autopilot-stop" type="button" hidden>Turn off</button>
+            </div>
+            <div class="autopilot-summary" id="autopilot-summary">Create a preset to get started.</div>
+            <div class="autopilot-editor">
+              <div class="field"><label for="autopilot-name">Preset name</label><input id="autopilot-name" maxlength="80" placeholder="Regular Day"></div>
+              <div class="autopilot-windows" id="autopilot-windows"></div>
+              <button class="secondary" id="autopilot-add-window" type="button">Add opening window</button>
+              <div class="autopilot-editor-actions">
+                <button id="autopilot-save" type="button">Save preset</button>
+                <button class="danger" id="autopilot-delete" type="button" disabled>Delete</button>
+              </div>
+            </div>
+          </section>
+
           <section class="group">
             <div class="group-head"><h3>Opening time</h3><span class="hint" id="schedule-hint">No time set</span></div>
             <div class="preset-row">
@@ -4948,6 +5104,7 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
     let latestStudentCount = 0;
     let refreshPromise = null;
     let lastRefreshStartedAt = 0;
+    let autopilotData = { presets: [], run: { status: 'off' } };
 
     async function api(url, options = {}) {
       const controller = new AbortController();
@@ -5016,6 +5173,73 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       return summary.label || 'Scheduled';
     }
 
+    function formatWindowTime(value) {
+      const parts = String(value || '').split(':');
+      const date = new Date(2000, 0, 1, Number(parts[0] || 0), Number(parts[1] || 0));
+      return timeFormatter.format(date);
+    }
+
+    function addAutopilotWindow(windowValue = { start: '', end: '' }) {
+      const row = document.createElement('div');
+      row.className = 'autopilot-window';
+      row.innerHTML = '<div class="field"><label>Opens</label><input type="time" data-autopilot-start value="' + escapeHtml(windowValue.start || '') + '"></div>' +
+        '<div class="field"><label>Closes</label><input type="time" data-autopilot-end value="' + escapeHtml(windowValue.end || '') + '"></div>' +
+        '<button type="button" data-remove-window aria-label="Remove opening window">×</button>';
+      $('autopilot-windows').appendChild(row);
+    }
+
+    function editAutopilotPreset(preset) {
+      $('autopilot-name').value = preset ? preset.name : '';
+      $('autopilot-windows').innerHTML = '';
+      const windows = preset && preset.windows && preset.windows.length ? preset.windows : [{ start: '', end: '' }];
+      windows.forEach(addAutopilotWindow);
+      $('autopilot-delete').disabled = !preset;
+    }
+
+    function renderAutopilot(data) {
+      autopilotData = data || { presets: [], run: { status: 'off' } };
+      const select = $('autopilot-preset');
+      const previous = select.value;
+      select.innerHTML = '<option value="">Choose a preset</option>' + (autopilotData.presets || [])
+        .map((preset) => '<option value="' + preset.id + '">' + escapeHtml(preset.name) + '</option>').join('');
+      const run = autopilotData.run || { status: 'off' };
+      const activePreset = run.presetName ? (autopilotData.presets || []).find((preset) => preset.name === run.presetName) : null;
+      select.value = activePreset ? String(activePreset.id) : ((autopilotData.presets || []).some((preset) => String(preset.id) === previous) ? previous : '');
+      $('autopilot-status').dataset.state = run.status || 'off';
+      $('autopilot-status').textContent = (run.status || 'off').replace(/^./, (value) => value.toUpperCase());
+      $('autopilot-start').hidden = run.status === 'running';
+      $('autopilot-pause').hidden = run.status !== 'running';
+      $('autopilot-resume').hidden = run.status !== 'paused';
+      $('autopilot-stop').hidden = run.status === 'off';
+      $('autopilot-start').disabled = !(autopilotData.presets || []).length;
+      const quickDisabled = run.status === 'running';
+      $('preset').disabled = quickDisabled;
+      $('opening-time').disabled = quickDisabled;
+      $('save-opening-time').disabled = quickDisabled;
+      if (run.status === 'running') {
+        const detail = run.currentWindow
+          ? 'Open now until ' + formatWindowTime(run.currentWindow.end) + '.'
+          : run.nextWindow ? 'Next opening at ' + formatWindowTime(run.nextWindow.start) + '.' : 'Today’s schedule is complete.';
+        $('autopilot-summary').textContent = run.presetName + ' — ' + detail;
+      } else if (run.status === 'paused') {
+        $('autopilot-summary').textContent = run.presetName + ' is paused. Manual controls are active.';
+      } else if (run.status === 'finished') {
+        $('autopilot-summary').textContent = run.presetName + ' has finished for today.';
+      } else {
+        $('autopilot-summary').textContent = (autopilotData.presets || []).length ? 'Choose a preset and turn on Autopilot for today.' : 'Create a preset to get started.';
+      }
+      const selected = (autopilotData.presets || []).find((preset) => String(preset.id) === select.value) || null;
+      editAutopilotPreset(selected);
+    }
+
+    async function loadAutopilot() {
+      try {
+        renderAutopilot(await api('/library/manage?api=autopilot'));
+      } catch (error) {
+        $('autopilot-summary').textContent = error instanceof Error ? error.message : 'Could not load Autopilot.';
+      }
+    }
+
     function render(state) {
       const count = Number(state.currentCount || 0);
       const cap = Number(state.capacity || 0);
@@ -5032,8 +5256,12 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       $('capacity-hint').textContent = available === 1 ? '1 spot available' : available + ' spots available';
       $('status').textContent = state.statusLabel;
       $('status-dot').dataset.status = state.status;
-      $('mode').textContent = state.statusMode === 'manual' ? 'Manual override' : 'Automatic';
-      $('status-hint').textContent = state.statusMode === 'manual' ? 'Manual override' : 'Automatic status control';
+      $('mode').textContent = state.autopilot && state.autopilot.status === 'running'
+        ? 'Autopilot'
+        : state.autopilot && state.autopilot.status === 'paused' ? 'Autopilot paused' : state.statusMode === 'manual' ? 'Manual override' : 'Automatic';
+      $('status-hint').textContent = state.autopilot && state.autopilot.status === 'running'
+        ? 'Autopilot controls today’s status'
+        : state.statusMode === 'manual' ? 'Manual override' : 'Automatic status control';
       $('scheduled-summary').textContent = formatScheduled(state.scheduledOpen);
       $('schedule-hint').textContent = state.scheduledOpen ? 'TV countdown active' : 'No time set';
 
@@ -5106,7 +5334,7 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       refreshPromise = (async () => {
         try {
           render(await api('/library/manage?api=current'));
-          if (manual) await loadKioskDevices();
+          if (manual) await Promise.all([loadKioskDevices(), loadAutopilot()]);
           if (manual) setNotice('Dashboard refreshed.', 'success');
         } catch (error) {
           setNotice(error instanceof Error ? error.message : 'Could not refresh.', 'error');
@@ -5179,6 +5407,79 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
         button.disabled = false;
       }
     });
+
+    $('autopilot-preset').addEventListener('change', () => {
+      const preset = (autopilotData.presets || []).find((item) => String(item.id) === $('autopilot-preset').value) || null;
+      editAutopilotPreset(preset);
+    });
+
+    $('autopilot-add-window').addEventListener('click', () => addAutopilotWindow());
+    $('autopilot-windows').addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-remove-window]');
+      if (!button) return;
+      button.closest('.autopilot-window')?.remove();
+      if (!$('autopilot-windows').children.length) addAutopilotWindow();
+    });
+
+    $('autopilot-save').addEventListener('click', async () => {
+      const selectedId = Number($('autopilot-preset').value);
+      const windows = Array.from(document.querySelectorAll('.autopilot-window')).map((row) => ({
+        start: row.querySelector('[data-autopilot-start]').value,
+        end: row.querySelector('[data-autopilot-end]').value,
+      }));
+      setNotice('Saving Autopilot preset...');
+      try {
+        const result = await post('/library/manage?api=autopilot-preset', {
+          id: Number.isInteger(selectedId) && selectedId > 0 ? selectedId : null,
+          name: $('autopilot-name').value.trim(),
+          windows,
+        });
+        await loadAutopilot();
+        $('autopilot-preset').value = String(result.id);
+        $('autopilot-preset').dispatchEvent(new Event('change'));
+        setNotice('Autopilot preset saved.', 'success');
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : 'Could not save preset.', 'error');
+      }
+    });
+
+    $('autopilot-delete').addEventListener('click', async () => {
+      const presetId = Number($('autopilot-preset').value);
+      if (!presetId || !confirm('Delete this Autopilot preset?')) return;
+      try {
+        await post('/library/manage?api=autopilot-delete', { presetId });
+        await loadAutopilot();
+        setNotice('Autopilot preset deleted.', 'success');
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : 'Could not delete preset.', 'error');
+      }
+    });
+
+    $('autopilot-start').addEventListener('click', async () => {
+      const presetId = Number($('autopilot-preset').value);
+      if (!presetId) { setNotice('Choose an Autopilot preset.', 'error'); return; }
+      try {
+        renderAutopilot(await post('/library/manage?api=autopilot-start', { presetId }));
+        await refresh();
+        setNotice('Autopilot is running for today.', 'success');
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : 'Could not start Autopilot.', 'error');
+      }
+    });
+
+    async function changeAutopilot(action) {
+      try {
+        renderAutopilot(await post('/library/manage?api=autopilot-state', { action }));
+        await refresh();
+        setNotice(action === 'resume' ? 'Autopilot resumed.' : action === 'pause' ? 'Autopilot paused.' : 'Autopilot turned off.', 'success');
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : 'Could not update Autopilot.', 'error');
+      }
+    }
+    $('autopilot-pause').addEventListener('click', () => changeAutopilot('pause'));
+    $('autopilot-resume').addEventListener('click', () => changeAutopilot('resume'));
+    $('autopilot-stop').addEventListener('click', () => changeAutopilot('stop'));
+
     $('preset').addEventListener('change', () => {
       if ($('preset').value) $('opening-time').value = $('preset').value;
     });
@@ -5210,6 +5511,7 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
           saveOpeningTime: $('save-opening-time').checked,
         });
         render(data.state);
+        await loadAutopilot();
         setNotice('Saved. TV updated.', 'success');
       } catch (error) {
         setNotice(error instanceof Error ? error.message : 'Could not save settings.', 'error');
@@ -5227,6 +5529,7 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
     });
 
     refresh();
+    loadAutopilot();
     loadKioskDevices();
     setInterval(() => { if (!document.hidden) refresh(); }, 15000);
     document.addEventListener('visibilitychange', () => {

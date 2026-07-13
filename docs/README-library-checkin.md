@@ -96,11 +96,17 @@ Keep the Chromebook on a persistent Chrome profile and open:
 https://signage.weeklywildcat.com/library/kiosk
 ```
 
-The first launch shows a pairing screen. From the Access-protected manage dashboard, choose **Generate pairing PIN**, then enter that 8-digit PIN on the Chromebook. The PIN expires after 10 minutes and can only be used once. The browser stores the resulting device credential in local storage, so normal restarts do not require another setup step.
+The first launch shows a pairing screen. From the Access-protected manage dashboard, name the Chromebook and choose **Generate pairing PIN**, then enter that 8-digit PIN on the Chromebook. The PIN expires after 10 minutes and can only be used once. The browser stores the resulting device credential in local storage, so normal restarts do not require another setup step.
 
 The manage dashboard lists paired Chromebooks and can revoke one at any time. A revoked Chromebook returns to the pairing screen.
 
 Use Cloudflare Access for `/library/manage` and the staff API routes. Keep `/api/library/kiosk-enroll`, `/api/library/kiosk-status`, `/api/library/scan`, `/api/library/checkin`, `/api/library/checkout`, and `/api/library/create-student` outside interactive Access login; the Worker requires a valid one-time PIN or paired-device credential for those routes.
+
+## Autopilot
+
+The manage dashboard can save named day presets containing multiple non-overlapping opening windows. Select a preset and choose **Turn on Autopilot** each morning. Autopilot is active for the current New York calendar day only, closes the library between windows, keeps automatic capacity behavior during open windows, and gives the TV a countdown to the next opening.
+
+Preset windows are snapshotted when Autopilot starts, so editing the reusable preset does not change the schedule already running today. A manual status change or use of the quick one-time scheduler pauses Autopilot; capacity and custom-message edits do not. The librarian can resume or turn off the current run from the same card.
 
 ## Student roster import
 

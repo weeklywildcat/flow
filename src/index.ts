@@ -1,4 +1,4 @@
-import libraryApp from "./library";
+import libraryApp, { getPublicSignageStatus } from "./library";
 
 type Status = "open" | "capacity" | "closed";
 
@@ -245,21 +245,16 @@ async function updateStatus(request: Request, env: Env): Promise<Response> {
 
 async function getEffectiveStatus(env: Env, includePresets: boolean): Promise<ApiStatus> {
   await ensureScheduleTables(env);
-
-  const row = await env.SIGNAGE_DB.prepare(
-    "SELECT status, message, updated_at, updated_by FROM library_status WHERE id = 1",
-  ).first<StoredStatusRow>();
-
   const now = new Date();
-  const fallbackUpdatedAt = now.toISOString();
-  const storedStatus = row && isStatus(row.status) ? row.status : "closed";
-  const storedMessage = normalizeMessage(row?.message ?? "");
-  const updatedAt = row?.updated_at ?? fallbackUpdatedAt;
-  const updatedBy = row?.updated_by?.trim() || "Library staff";
-  const isStale = !isSameNewYorkDate(updatedAt, now);
-  const effectiveStatus: Status = isStale ? "closed" : storedStatus;
+  const state = await getPublicSignageStatus(env);
+  const effectiveStatus: Status = isStatus(state.status) ? state.status : "closed";
+  const storedStatus = effectiveStatus;
+  const storedMessage = normalizeMessage(state.message ?? "");
+  const updatedAt = state.updatedAt ?? now.toISOString();
+  const updatedBy = state.updatedBy?.trim() || "Library staff";
+  const isStale = false;
   const copy = STATUS_COPY[effectiveStatus];
-  const scheduledOpen = isStale ? null : await getScheduledOpen(env, now);
+  const scheduledOpen = state.scheduledOpen;
   const openingTimePresets = includePresets ? await getOpeningTimePresets(env) : [];
 
   return {
@@ -268,7 +263,7 @@ async function getEffectiveStatus(env: Env, includePresets: boolean): Promise<Ap
     label: copy.label,
     sentence: copy.sentence,
     icon: copy.icon,
-    message: isStale ? "" : storedMessage,
+    message: storedMessage,
     storedMessage,
     updatedAt,
     updatedBy,

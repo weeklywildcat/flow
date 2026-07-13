@@ -152,6 +152,42 @@ CREATE TABLE IF NOT EXISTS library_kiosk_devices (
 CREATE INDEX IF NOT EXISTS idx_library_kiosk_devices_active
   ON library_kiosk_devices(revoked_at, last_seen_at);
 
+CREATE TABLE IF NOT EXISTS library_autopilot_presets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS library_autopilot_windows (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  preset_id INTEGER NOT NULL,
+  start_time TEXT NOT NULL,
+  end_time TEXT NOT NULL,
+  sort_order INTEGER NOT NULL,
+  FOREIGN KEY (preset_id) REFERENCES library_autopilot_presets(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_library_autopilot_windows_preset
+  ON library_autopilot_windows(preset_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS library_autopilot_runs (
+  run_date TEXT PRIMARY KEY,
+  preset_id INTEGER,
+  preset_name TEXT NOT NULL,
+  windows_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'paused', 'stopped')),
+  activated_at TEXT NOT NULL,
+  activated_by TEXT NOT NULL,
+  paused_at TEXT,
+  paused_by TEXT
+);
+
+INSERT OR IGNORE INTO library_app_migrations (name, applied_at)
+VALUES ('autopilot_v1', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
 INSERT INTO library_open_schedule (id, opens_at, time_value, updated_at, updated_by)
 VALUES (1, NULL, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'Library staff')
 ON CONFLICT(id) DO NOTHING;
