@@ -257,12 +257,9 @@ async function handleScan(request: Request, env: LibraryEnv): Promise<Response> 
 
   const activeVisit = await findActiveVisitForStudent(env, student.id);
   const state = await getCurrentState(env, false);
-  const warning = state.status === "closed"
-    ? "The library is marked closed. Your visit can still be recorded."
-    : undefined;
 
   if (activeVisit) {
-    return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(activeVisit), state, warning });
+    return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(activeVisit), state });
   }
 
   if (state.status === "capacity") {
@@ -274,7 +271,7 @@ async function handleScan(request: Request, env: LibraryEnv): Promise<Response> 
     }, 409);
   }
 
-  return json({ mode: "checkin", student: publicStudent(student), reasons: REASONS, state, warning });
+  return json({ mode: "checkin", student: publicStudent(student), reasons: REASONS, state });
 }
 
 async function handleCheckin(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
@@ -327,9 +324,6 @@ async function handleCheckin(request: Request, env: LibraryEnv, ctx: ExecutionCo
   return json({
     ok: true,
     visit: visitPayload(visit),
-    warning: stateBefore.status === "closed"
-      ? "The library is marked closed. Your check-in was still recorded."
-      : undefined,
     state: await getCurrentState(env, true),
   });
 }
@@ -2583,7 +2577,6 @@ function kioskHtml(): string {
 
     let currentBarcode = '';
     let currentFirstName = '';
-    let currentCheckinWarning = '';
     let keyBuffer = '';
     let keyTimer = null;
     let resetTimer = null;
@@ -2856,22 +2849,21 @@ function kioskHtml(): string {
       requestAnimationFrame(() => newFirstName && newFirstName.focus({ preventScroll: true }));
     }
 
-    function showReasons(student, warning) {
+    function showReasons(student) {
       clearTimeout(workingTimer);
       busy = false;
       resetReasonButtons();
       currentFirstName = student && student.firstName ? student.firstName : 'there';
-      currentCheckinWarning = warning || '';
       setStep('reasons');
-      setTone(currentCheckinWarning ? 'error' : 'idle');
+      setTone('idle');
       setCopy({
         eyebrow: 'Check-In',
         headline: 'Welcome, ' + currentFirstName,
-        lead: currentCheckinWarning || 'What brings you in?',
+        lead: 'What brings you in?',
         statusTitle: '',
         statusDetail: '',
-        hint: currentCheckinWarning ? 'You can still check in. Choose a reason.' : 'Tap one reason.',
-        footerStatus: currentCheckinWarning ? 'Closed — check-in allowed' : 'Choose',
+        hint: 'Tap one reason.',
+        footerStatus: 'Choose',
       });
       reasonTimer = setTimeout(showIdle, 20000);
       focusScanner();
@@ -2908,18 +2900,12 @@ function kioskHtml(): string {
         if (data.mode === 'checkout') {
           const firstName = data.student && data.student.firstName ? data.student.firstName : 'there';
           await post('/api/library/checkout', { barcode: scanned, method: 'scan_out' });
-          showSuccess(
-            'Checked out, ' + firstName,
-            data.warning ? 'The library is marked closed. Your checkout was recorded.' : 'See you next time.',
-            data.warning ? 2600 : 850,
-            'Ready for the next scan.',
-            'checkout'
-          );
+          showSuccess('Checked out, ' + firstName, 'See you next time.', 850, 'Ready for the next scan.', 'checkout');
           return;
         }
 
         if (data.mode === 'checkin') {
-          showReasons(data.student, data.warning);
+          showReasons(data.student);
           return;
         }
 
@@ -3027,9 +3013,7 @@ function kioskHtml(): string {
           lastName: newLastName.value,
           grade: newGrade.value,
         });
-        showReasons(data.student, data.state && data.state.status === 'closed'
-          ? 'The library is marked closed. Your visit can still be recorded.'
-          : '');
+        showReasons(data.student);
       } catch (error) {
         busy = false;
         showError('Could not save', error instanceof Error ? error.message : 'Try again or see the librarian.', 3500);
@@ -3046,11 +3030,7 @@ function kioskHtml(): string {
         const reason = button.dataset.reason || '';
         markReasonSelected(button);
         await sleep(120);
-        const result = await post('/api/library/checkin', { barcode: currentBarcode, reason });
-        if (result.warning) {
-          showSuccess('Checked in, ' + currentFirstName, result.warning, 2800, 'Please check with the librarian.', 'checkin');
-          return;
-        }
+        await post('/api/library/checkin', { barcode: currentBarcode, reason });
         if (reason === 'Lunch') {
           showSuccess('Checked in, ' + currentFirstName, 'You are all set.', 900, 'Ready for the next scan.', 'checkin');
         } else {
