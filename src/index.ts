@@ -762,7 +762,7 @@ function viewHtml(): string {
         var(--bar-dark) 100%
       );
       background-size: 220% 100%;
-      animation: status-bar-sweep 8s linear infinite;
+      animation: status-bar-sweep 2.25s linear infinite;
     }
 
     @keyframes status-bar-sweep {
