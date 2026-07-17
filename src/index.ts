@@ -723,6 +723,10 @@ function viewHtml(): string {
     [data-status="open"] { --wash: #edf7f1; }
     [data-status="capacity"] { --wash: #fff7df; }
     [data-status="closed"] { --wash: #fbefef; }
+    [data-status="loading"] {
+      --accent: transparent;
+      --wash: #f7f4ea;
+    }
 
     body {
       background: var(--wash);
@@ -838,7 +842,7 @@ function viewHtml(): string {
     }
   </style>
 </head>
-<body data-status="closed">
+<body data-status="loading">
   <div class="screen" aria-live="polite">
     <header>
       <div class="time" id="clock"></div>
@@ -846,8 +850,8 @@ function viewHtml(): string {
     <main>
       <section>
         <h1>LIBRARY</h1>
-        <div class="status" id="status-label">CLOSED</div>
-        <div class="sentence" id="sentence">The library is currently unavailable.</div>
+        <div class="status" id="status-label"></div>
+        <div class="sentence" id="sentence"></div>
         <div class="message" id="message"></div>
         <div class="countdown" id="countdown">
           <div class="countdown-label">Opening In</div>
@@ -858,7 +862,7 @@ function viewHtml(): string {
       <div class="symbol" id="symbol" aria-hidden="true"></div>
     </main>
     <footer>
-      <div class="updated" id="updated">Last updated unavailable</div>
+      <div class="updated" id="updated"></div>
       <div class="updated stale" id="stale-note" hidden>Showing closed until staff updates today</div>
     </footer>
   </div>
