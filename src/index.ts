@@ -700,14 +700,20 @@ function viewHtml(): string {
 
     [data-status="open"] {
       --accent: var(--open);
+      --bar-dark: #0d6237;
+      --bar-light: #35a967;
     }
 
     [data-status="capacity"] {
       --accent: var(--capacity);
+      --bar-dark: #8a5700;
+      --bar-light: #e0a52c;
     }
 
     [data-status="closed"] {
       --accent: var(--closed);
+      --bar-dark: #861f2d;
+      --bar-light: #d04b58;
     }
 
     /* Full-screen TV signage */
@@ -725,6 +731,8 @@ function viewHtml(): string {
     [data-status="closed"] { --wash: #fbefef; }
     [data-status="loading"] {
       --accent: transparent;
+      --bar-dark: transparent;
+      --bar-light: transparent;
       --wash: #f7f4ea;
     }
 
@@ -734,11 +742,39 @@ function viewHtml(): string {
       font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
     }
 
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0 0 auto;
+      height: clamp(20px, 1.6vw, 32px);
+      background: transparent;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    body:not([data-status="loading"])::before {
+      background-image: linear-gradient(
+        90deg,
+        var(--bar-dark) 0%,
+        var(--bar-dark) 30%,
+        var(--bar-light) 50%,
+        var(--bar-dark) 70%,
+        var(--bar-dark) 100%
+      );
+      background-size: 220% 100%;
+      animation: status-bar-sweep 8s linear infinite;
+    }
+
+    @keyframes status-bar-sweep {
+      from { background-position: 100% 0; }
+      to { background-position: -100% 0; }
+    }
+
     .screen {
       padding: clamp(30px, 3.2vw, 62px) clamp(38px, 4.2vw, 82px);
       gap: clamp(16px, 1.6vw, 30px);
       border: 0;
-      border-top: clamp(20px, 1.6vw, 32px) solid var(--accent);
+      border-top: clamp(20px, 1.6vw, 32px) solid transparent;
     }
 
     header,
@@ -838,6 +874,13 @@ function viewHtml(): string {
 
       .symbol {
         display: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body:not([data-status="loading"])::before {
+        animation: none;
+        background-position: 50% 0;
       }
     }
   </style>
