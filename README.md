@@ -12,6 +12,7 @@ The Chromebook kiosk lets students scan their ID to check in or check out. The l
 - `POST /api/library/checkin` — record a visit.
 - `POST /api/library/checkout` — close a visit.
 - `GET /api/library/current` — staff-only live count and active roster.
+- `GET /api/library/export-csv?from=YYYY-MM-DD&to=YYYY-MM-DD` — staff-only visit history export for an inclusive date range.
 - `GET /api/library/sheet-status` — staff-only Google Sheets queue status.
 - `POST /api/library/sync-sheets` — staff-only retry for queued archive events.
 
