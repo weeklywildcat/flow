@@ -3166,13 +3166,49 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       min-height: 58px;
       padding: 8px 16px;
       border-bottom: 1px solid var(--line);
-      animation: fadeRow 120ms ease-out both;
+      transition: background-color 180ms ease, box-shadow 180ms ease;
     }
 
-    @keyframes fadeRow {
-      from { opacity: .7; transform: translateY(1px); }
-      to { opacity: 1; transform: translateY(0); }
+    .student-row.is-entering {
+      animation: rosterRowIn 460ms cubic-bezier(.2, .8, .2, 1) both;
+      animation-delay: calc(var(--row-index, 0) * 42ms);
+      transform-origin: 50% 0;
     }
+
+    @keyframes rosterRowIn {
+      0% {
+        opacity: 0;
+        transform: translateY(13px) scale(.985);
+        background: var(--green-bg);
+        box-shadow: inset 3px 0 0 var(--green);
+      }
+      62% {
+        opacity: 1;
+        transform: translateY(-1px) scale(1);
+        background: var(--green-bg);
+        box-shadow: inset 3px 0 0 var(--green);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        background: transparent;
+        box-shadow: inset 0 0 0 transparent;
+      }
+    }
+
+    @keyframes countPulse {
+      0% { transform: scale(1); }
+      42% { color: var(--green); transform: scale(1.055); }
+      100% { color: inherit; transform: scale(1); }
+    }
+
+    @keyframes noticeIn {
+      0% { opacity: .35; transform: translateY(3px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+
+    #current.count-changed { animation: countPulse 420ms cubic-bezier(.2, .8, .2, 1) both; }
+    .notice.is-updated { animation: noticeIn 220ms ease-out both; }
 
     .student-row:last-child { border-bottom: 0; }
 
@@ -4733,6 +4769,9 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
     const dateTimeFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     const manualRefreshCooldownMs = 5000;
     let latestStudentCount = 0;
+    let previousStudentIds = new Set();
+    let hasRenderedRoster = false;
+    let previousRenderedCount = null;
     let refreshPromise = null;
     let lastRefreshStartedAt = 0;
 
@@ -4764,27 +4803,50 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
     function setNotice(text, tone = '') {
       $('notice').textContent = text;
       $('notice').dataset.tone = tone;
+      replayAnimation($('notice'), 'is-updated', 260);
+    }
+
+    function replayAnimation(element, className, cleanupDelay) {
+      if (!element) return;
+      element.classList.remove(className);
+      void element.offsetWidth;
+      element.classList.add(className);
+      window.setTimeout(() => element.classList.remove(className), cleanupDelay);
     }
 
     function render(state) {
       const count = Number(state.currentCount || state.inLibraryCount || 0);
       const students = Array.isArray(state.students) ? state.students : [];
+      const nextStudentIds = new Set(students.map((item) => String(item.visitId)));
+      const enteringStudentIds = new Set(
+        students
+          .filter((item) => !hasRenderedRoster || !previousStudentIds.has(String(item.visitId)))
+          .map((item) => String(item.visitId))
+      );
       latestStudentCount = students.length || count;
       $('clear-all').disabled = latestStudentCount < 1;
 
       $('current').textContent = count === 1 ? '1 student' : count + ' students';
+      if (previousRenderedCount !== null && previousRenderedCount !== count) {
+        replayAnimation($('current'), 'count-changed', 520);
+      }
+      previousRenderedCount = count;
 
       $('student-count-label').textContent = students.length === 1 ? '1 student checked in' : students.length + ' students checked in';
 
       if (!students.length) {
         $('students').innerHTML = '<div class="empty"><div><strong>No students checked in</strong><span>Students will appear here as they scan in.</span></div></div>';
+        previousStudentIds = nextStudentIds;
+        hasRenderedRoster = true;
         return;
       }
 
-      $('students').innerHTML = students.map((item) => {
+      $('students').innerHTML = students.map((item, index) => {
         const checkedIn = new Date(item.checkedInAt);
         const time = Number.isNaN(checkedIn.getTime()) ? 'Unknown' : timeFormatter.format(checkedIn);
-        return '<div class="student-row">' +
+        const visitId = String(item.visitId);
+        const enteringClass = enteringStudentIds.has(visitId) ? ' is-entering' : '';
+        return '<div class="student-row' + enteringClass + '" style="--row-index:' + Math.min(index, 8) + '">' +
           '<div><div class="row-label">Student</div><div class="student-name">' + escapeHtml(item.firstName + ' ' + item.lastName) + '</div><div class="student-id">ID ' + escapeHtml(item.studentId) + '</div></div>' +
           '<div><div class="row-label">Grade</div><div class="cell">' + escapeHtml(item.grade || '') + '</div></div>' +
           '<div><div class="row-label">Reason</div><div class="cell">' + escapeHtml(item.reason) + '</div></div>' +
@@ -4792,6 +4854,8 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
           '<div><button class="danger small" data-visit="' + item.visitId + '" type="button">Check out</button></div>' +
         '</div>';
       }).join('');
+      previousStudentIds = nextStudentIds;
+      hasRenderedRoster = true;
     }
 
     function escapeHtml(text) {
