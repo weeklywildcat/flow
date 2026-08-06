@@ -1,173 +1,59 @@
-# Library Check-In Starter v6
+# Library Check-In / Check-Out
 
-This adds a separate Cloudflare Worker for the library check-in system while keeping the current `signage` Worker untouched.
+The library Worker is intentionally focused on one workflow: recording who is in the library.
 
-## What v6 changes
+## Student kiosk
 
-- Redesigns the Chromebook kiosk as a real check-in terminal instead of a demo-style card app.
-- Uses a plain institutional layout: maroon accent, off-white surface, large readable type, and minimal copy.
-- Uses four kiosk states only: waiting, reason selection, success, and error/help.
-- Keeps checkout fast: already-checked-in students scan once and get checked out immediately.
-- Cuts the reason list down to high-value options: Class work, Printing, Book checkout, Lunch, Meeting, Other.
-- Delays the loading state slightly so fast scans do not flash a spinner/loading screen.
-- Keeps the whole page scanner-ready with a hidden focused input and global keyboard capture.
-- Reworks the librarian dashboard as an operations dashboard: current count, TV status, mode, active students, then settings.
+- Open `/library/kiosk` on the paired Chromebook with the barcode scanner.
+- A known student with no active visit is prompted for a reason and checked in.
+- A known student with an active visit is checked out immediately when they scan again.
+- A new barcode can be saved with the student’s name and grade, then checked in.
 
-## What it adds
+## Librarian dashboard
 
-- `/library/kiosk` for the Chromebook + barcode scanner station
-- `/library/manage` for the librarian dashboard
-- D1 tables for students, visits, settings, and Google Sheets sync events
-- Capacity logic that writes into the existing `library_status` table used by the current TV signage
-- Optional Google Sheets archive through Apps Script
+Open `/library/manage` behind Cloudflare Access. The dashboard shows:
 
-## Files
+- the current number of students in the library;
+- the active student roster, reason, and check-in time;
+- a checkout action for each student;
+- a “Check everyone out” end-of-day action; and
+- Chromebook pairing plus a Google Sheets event archive with automatic retry.
 
-- `src/library.ts` — new Worker app
-- `wrangler.library.jsonc` — deploy config for the library Worker
-- `library-schema.sql` — D1 schema additions
-- `google/apps-script.gs` — Apps Script receiver for Google Sheets archive
-- `students-template.csv` — roster import template
-- `students-template.json` — API import example
+There are no status, capacity, opening-time, or schedule controls. A student can check in regardless of the current count.
 
-## Local setup
+## D1 and archive
 
-Copy these files into the existing `weeklywildcat/signage` repo.
+Apply `library-schema.sql` to the `wildcat-signage` D1 database. Check-in, checkout, clear-all, and new-student events are written to `library_visits` or `library_sheet_events`; the Worker then delivers the queued events to Google Sheets.
 
-Apply the database schema locally while testing:
+## Google Sheets sync
 
-```bash
-npx wrangler d1 execute wildcat-signage --local --file=library-schema.sql -c wrangler.library.jsonc
-```
+The sync is a full-stack path:
 
-Apply the database schema remotely before deploying:
+1. The Worker writes each event to D1 before attempting delivery.
+2. The Worker sends the event to the Apps Script web app with a shared secret and a D1 event ID.
+3. Apps Script writes to the `Events` and `Visit Log` tabs and returns `{ "ok": true }` only after the write succeeds.
+4. The Worker marks that D1 event as synced. Failed events stay queued for the five-minute cron retry or the dashboard’s **Sync now** button.
 
-```bash
-npx wrangler d1 execute wildcat-signage --remote --file=library-schema.sql -c wrangler.library.jsonc
-```
+Configure the Apps Script project with these Script Properties:
 
-Run locally:
+| Property | Value |
+| --- | --- |
+| `LIBRARY_SPREADSHEET_ID` | ID from the Google Sheet URL |
+| `LIBRARY_SYNC_SECRET` | Long random value shared with the Worker |
+| `LIBRARY_TIME_ZONE` | Optional; defaults to `America/New_York` |
 
-```bash
-npx wrangler dev -c wrangler.library.jsonc
-```
-
-Deploy the library Worker:
-
-```bash
-npx wrangler deploy -c wrangler.library.jsonc
-```
-
-Suggested custom domain:
-
-```txt
-library.weeklywildcat.com
-```
-
-## Local testing
-
-Start Wrangler:
-
-```bash
-npx wrangler dev -c wrangler.library.jsonc
-```
-
-In another Terminal window, import the test student:
-
-```bash
-curl -X POST http://localhost:8787/api/library/import-students \
-  -H "Content-Type: application/json" \
-  --data @students-template.json
-```
-
-Open:
-
-```txt
-http://localhost:8787/library/kiosk
-```
-
-Type `12345` and press Enter anywhere on the page. In local dev, the kiosk also shows a small `Test scan 12345` button.
-
-## Chromebook pairing
-
-Keep the Chromebook on a persistent Chrome profile and open:
-
-```txt
-https://signage.weeklywildcat.com/library/kiosk
-```
-
-The first launch shows a pairing screen. From the Access-protected manage dashboard, name the Chromebook and choose **Generate pairing PIN**, then enter that 8-digit PIN on the Chromebook. The PIN expires after 10 minutes and can only be used once. The browser stores the resulting device credential in local storage, so normal restarts do not require another setup step.
-
-The manage dashboard lists paired Chromebooks and can revoke one at any time. A revoked Chromebook returns to the pairing screen.
-
-Use Cloudflare Access for `/library/manage` and the staff API routes. Keep `/api/library/kiosk-enroll`, `/api/library/kiosk-status`, `/api/library/scan`, `/api/library/checkin`, `/api/library/checkout`, and `/api/library/create-student` outside interactive Access login; the Worker requires a valid one-time PIN or paired-device credential for those routes.
-
-## Autopilot
-
-The manage dashboard can save named day presets containing multiple non-overlapping opening windows. Select a preset and choose **Turn on Autopilot** each morning. Autopilot is active for the current New York calendar day only, closes the library between windows, keeps automatic capacity behavior during open windows, and gives the TV a countdown to the next opening.
-
-Preset windows are snapshotted when Autopilot starts, so editing the reusable preset does not change the schedule already running today. A manual status change or use of the quick one-time scheduler pauses Autopilot; capacity and custom-message edits do not. The librarian can resume or turn off the current run from the same card.
-
-## Student roster import
-
-The starter Worker includes a JSON import endpoint:
-
-```bash
-curl -X POST https://library.weeklywildcat.com/api/library/import-students \
-  -H "Content-Type: application/json" \
-  --data @students-template.json
-```
-
-The barcode value should match what the USB scanner types from the student ID card.
-
-## Signage behavior
-
-The library check-in Worker writes the effective status into the existing `library_status` table:
-
-- under capacity → `open`
-- at/above capacity → `capacity`
-- manual override → whatever the librarian chooses
-
-That means the current TV display can keep reading the same `/api/status` endpoint from the existing signage Worker.
-
-## Google Sheets archive
-
-The Worker queues every sign-in/sign-out event in D1 first. If Sheets fails, the live check-in system still works.
-
-Use the Apps Script file in a Sheet owned by the librarian.
-
-Set an Apps Script property:
-
-```txt
-LIBRARY_SYNC_SECRET = some-long-random-secret
-```
-
-Deploy the script as a web app. Then set Cloudflare secrets:
+Deploy [`google/apps-script.gs`](../google/apps-script.gs) as a Web app that executes as the spreadsheet owner and is accessible to anyone with the link. Then set the Worker secrets:
 
 ```bash
 npx wrangler secret put SHEETS_WEBHOOK_URL -c wrangler.library.jsonc
 npx wrangler secret put SHEETS_WEBHOOK_SECRET -c wrangler.library.jsonc
 ```
 
-For the URL, use the Apps Script web app URL with the secret query string appended:
+The Apps Script receiver is idempotent by `sheetEventId`, supports events that arrive out of order, and migrates an older `Events` tab by adding its `Sync ID` column.
 
-```txt
-https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec?secret=some-long-random-secret
+For local development:
+
+```bash
+npx wrangler d1 execute wildcat-signage --local --file=library-schema.sql -c wrangler.library.jsonc
+npx wrangler dev -c wrangler.library.jsonc
 ```
-
-Then the librarian dashboard can use “Retry Sheets Sync” if any events were queued while Google was unavailable.
-
-## v8 scanner check
-
-The kiosk page should show a small `v8 scanner` pill in the top-right corner. If you do not see that, the browser or Wrangler is still serving an older file.
-
-Use `Command + Shift + R` after restarting Wrangler.
-
-
-## Kiosk design v8
-
-The kiosk is intentionally reduced to four states: waiting for scan, reason selection, success, and error. It uses system sans-serif fonts only, very large touch targets, short plain-language copy, and instant scan-out for students already checked in. Look for the `UX v8` marker in the top-right corner to verify the newest screen is loaded.
-
-## v16 manage sizing update
-
-The manage screen was adjusted to a normal staff-app scale: larger readable type, stronger row spacing, and the same fixed one-screen layout on desktop without switching to oversized child-style controls.
