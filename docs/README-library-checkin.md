@@ -51,6 +51,14 @@ npx wrangler secret put SHEETS_WEBHOOK_SECRET -c wrangler.library.jsonc
 
 The Apps Script receiver is idempotent by `sheetEventId`, supports events that arrive out of order, and migrates an older `Events` tab by adding its `Sync ID` column.
 
+## CSV export
+
+The librarian dashboard includes an **Export history** control with Today, Last 7 days, Last 30 days, and Custom dates options. It exports visits checked in during the inclusive date range, including active visits that have not checked out yet. The direct staff endpoint is:
+
+```text
+GET /api/library/export-csv?from=YYYY-MM-DD&to=YYYY-MM-DD
+```
+
 For local development:
 
 ```bash
