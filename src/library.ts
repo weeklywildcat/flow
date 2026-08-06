@@ -41,6 +41,7 @@ type VisitRow = {
   checked_in_at: string;
   checked_out_at: string | null;
   checkout_method: string | null;
+  checked_out_by: string | null;
 };
 
 type CountRow = { count: number };
@@ -189,6 +190,10 @@ export default {
 
       if (pathname === "/api/library/current") {
         return request.method === "GET" ? json(await getCurrentState(env, true)) : methodNotAllowed(["GET"]);
+      }
+
+      if (pathname === "/api/library/export-csv") {
+        return request.method === "GET" ? handleExportCsv(request, env) : methodNotAllowed(["GET"]);
       }
 
       if (pathname === "/api/library/sheet-status") {
@@ -583,6 +588,66 @@ async function handleSheetStatus(env: LibraryEnv): Promise<Response> {
   return json({ ok: true, ...(await getSheetSyncSummary(env)) });
 }
 
+async function handleExportCsv(request: Request, env: LibraryEnv): Promise<Response> {
+  const url = new URL(request.url);
+  const today = dateInTimezone(new Date());
+  const fromDate = parseDateOnly(url.searchParams.get("from") ?? today);
+  const toDate = parseDateOnly(url.searchParams.get("to") ?? fromDate ?? today);
+
+  if (!fromDate || !toDate) {
+    return json({ error: "Use valid from and to dates in YYYY-MM-DD format." }, 400);
+  }
+  if (fromDate > toDate) {
+    return json({ error: "The start date must be on or before the end date." }, 400);
+  }
+  if (daysBetween(fromDate, toDate) > 366) {
+    return json({ error: "Choose a date range of one year or less." }, 400);
+  }
+
+  const rows = await env.SIGNAGE_DB.prepare(
+    `${visitSelectSql()} WHERE v.checked_in_at >= ? AND v.checked_in_at < ? ORDER BY v.checked_in_at ASC`
+  ).bind(localDateStartIso(fromDate), localDateStartIso(addDateOnly(toDate, 1))).all<VisitRow>();
+
+  const csvRows = [
+    [
+      "Visit ID",
+      "Student ID",
+      "First Name",
+      "Last Name",
+      "Grade",
+      "Reason",
+      "Checked In (Eastern)",
+      "Checked Out (Eastern)",
+      "Duration Minutes",
+      "Checkout Method",
+      "Checked Out By",
+    ],
+    ...rows.results.map((visit) => [
+      visit.id,
+      visit.student_id,
+      visit.first_name,
+      visit.last_name,
+      visit.grade ?? "",
+      visit.reason,
+      exportTimestamp(visit.checked_in_at),
+      exportTimestamp(visit.checked_out_at),
+      visit.checked_out_at ? durationMinutes(visit.checked_in_at, visit.checked_out_at) ?? "" : "",
+      visit.checkout_method ?? "",
+      visit.checked_out_by ?? "",
+    ]),
+  ];
+
+  const csv = csvRows.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  return new Response(csv, {
+    headers: {
+      ...securityHeaders(),
+      "Cache-Control": "no-store",
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="library-visits-${fromDate}-to-${toDate}.csv"`,
+    },
+  });
+}
+
 async function handleSheetRetry(_request: Request, env: LibraryEnv): Promise<Response> {
   const result = await retryPendingSheetEvents(env, 25, true);
   const summary = await getSheetSyncSummary(env);
@@ -690,7 +755,8 @@ function visitSelectSql(): string {
       v.reason,
       v.checked_in_at,
       v.checked_out_at,
-      v.checkout_method
+      v.checkout_method,
+      v.checked_out_by
     FROM library_visits v
     JOIN library_students s ON s.id = v.student_row_id`;
 }
@@ -847,6 +913,82 @@ function durationMinutes(startIso: string, endIso: string): number | null {
   const end = new Date(endIso).getTime();
   if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null;
   return Math.round((end - start) / 60000);
+}
+
+function dateInTimezone(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+}
+
+function parseDateOnly(value: string | null): string | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    return null;
+  }
+  return value;
+}
+
+function addDateOnly(value: string, days: number): string {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function daysBetween(fromDate: string, toDate: string): number {
+  const [fromYear, fromMonth, fromDay] = fromDate.split("-").map(Number);
+  const [toYear, toMonth, toDay] = toDate.split("-").map(Number);
+  return Math.floor(
+    (Date.UTC(toYear, toMonth - 1, toDay) - Date.UTC(fromYear, fromMonth - 1, fromDay)) / 86400000
+  );
+}
+
+function localDateStartIso(value: string): string {
+  const [year, month, day] = value.split("-").map(Number);
+  const utcWallClock = Date.UTC(year, month - 1, day);
+  const offsetMinutes = timezoneOffsetMinutes(new Date(utcWallClock));
+  return new Date(utcWallClock - offsetMinutes * 60000).toISOString();
+}
+
+function timezoneOffsetMinutes(value: Date): number {
+  const zoneName = new Intl.DateTimeFormat("en-US", {
+    timeZone: TIMEZONE,
+    timeZoneName: "shortOffset",
+  }).formatToParts(value).find((part) => part.type === "timeZoneName")?.value ?? "GMT";
+  const match = zoneName.match(/^(?:GMT|UTC)([+-])(\d{1,2})(?::?(\d{2}))?$/);
+  if (!match) return 0;
+  const sign = match[1] === "+" ? 1 : -1;
+  return sign * (Number(match[2]) * 60 + Number(match[3] ?? 0));
+}
+
+function exportTimestamp(value: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  }).format(date);
+}
+
+function csvCell(value: unknown): string {
+  const text = value === null || value === undefined ? "" : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
@@ -3024,13 +3166,49 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       min-height: 58px;
       padding: 8px 16px;
       border-bottom: 1px solid var(--line);
-      animation: fadeRow 120ms ease-out both;
+      transition: background-color 180ms ease, box-shadow 180ms ease;
     }
 
-    @keyframes fadeRow {
-      from { opacity: .7; transform: translateY(1px); }
-      to { opacity: 1; transform: translateY(0); }
+    .student-row.is-entering {
+      animation: rosterRowIn 460ms cubic-bezier(.2, .8, .2, 1) both;
+      animation-delay: calc(var(--row-index, 0) * 42ms);
+      transform-origin: 50% 0;
     }
+
+    @keyframes rosterRowIn {
+      0% {
+        opacity: 0;
+        transform: translateY(13px) scale(.985);
+        background: var(--green-bg);
+        box-shadow: inset 3px 0 0 var(--green);
+      }
+      62% {
+        opacity: 1;
+        transform: translateY(-1px) scale(1);
+        background: var(--green-bg);
+        box-shadow: inset 3px 0 0 var(--green);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        background: transparent;
+        box-shadow: inset 0 0 0 transparent;
+      }
+    }
+
+    @keyframes countPulse {
+      0% { transform: scale(1); }
+      42% { color: var(--green); transform: scale(1.055); }
+      100% { color: inherit; transform: scale(1); }
+    }
+
+    @keyframes noticeIn {
+      0% { opacity: .35; transform: translateY(3px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+
+    #current.count-changed { animation: countPulse 420ms cubic-bezier(.2, .8, .2, 1) both; }
+    .notice.is-updated { animation: noticeIn 220ms ease-out both; }
 
     .student-row:last-child { border-bottom: 0; }
 
@@ -4554,6 +4732,31 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
             <div class="setting-helper" id="sheets-helper">Check-in and checkout events are queued in D1 and delivered automatically. Use this button to retry anything still waiting.</div>
             <button class="secondary" id="sync" type="button" title="Retry queued check-in and checkout events.">Sync now</button>
           </section>
+
+          <section class="group">
+            <div class="group-head"><h3>Export history</h3><span class="hint">CSV</span></div>
+            <div class="setting-helper">Download check-in and checkout history for a selected time frame.</div>
+            <div class="field">
+              <label for="export-range">Time frame</label>
+              <select id="export-range">
+                <option value="today">Today</option>
+                <option value="7">Last 7 days</option>
+                <option value="30">Last 30 days</option>
+                <option value="custom">Custom dates</option>
+              </select>
+            </div>
+            <div class="two-even" id="export-custom" hidden>
+              <div class="field">
+                <label for="export-from">Start date</label>
+                <input id="export-from" type="date">
+              </div>
+              <div class="field">
+                <label for="export-to">End date</label>
+                <input id="export-to" type="date">
+              </div>
+            </div>
+            <button class="secondary" id="export-csv" type="button">Export CSV</button>
+          </section>
           <div class="notice" id="notice" role="status" aria-live="polite"></div>
         </div>
       </aside>
@@ -4566,6 +4769,9 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
     const dateTimeFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     const manualRefreshCooldownMs = 5000;
     let latestStudentCount = 0;
+    let previousStudentIds = new Set();
+    let hasRenderedRoster = false;
+    let previousRenderedCount = null;
     let refreshPromise = null;
     let lastRefreshStartedAt = 0;
 
@@ -4597,27 +4803,50 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
     function setNotice(text, tone = '') {
       $('notice').textContent = text;
       $('notice').dataset.tone = tone;
+      replayAnimation($('notice'), 'is-updated', 260);
+    }
+
+    function replayAnimation(element, className, cleanupDelay) {
+      if (!element) return;
+      element.classList.remove(className);
+      void element.offsetWidth;
+      element.classList.add(className);
+      window.setTimeout(() => element.classList.remove(className), cleanupDelay);
     }
 
     function render(state) {
       const count = Number(state.currentCount || state.inLibraryCount || 0);
       const students = Array.isArray(state.students) ? state.students : [];
+      const nextStudentIds = new Set(students.map((item) => String(item.visitId)));
+      const enteringStudentIds = new Set(
+        students
+          .filter((item) => !hasRenderedRoster || !previousStudentIds.has(String(item.visitId)))
+          .map((item) => String(item.visitId))
+      );
       latestStudentCount = students.length || count;
       $('clear-all').disabled = latestStudentCount < 1;
 
       $('current').textContent = count === 1 ? '1 student' : count + ' students';
+      if (previousRenderedCount !== null && previousRenderedCount !== count) {
+        replayAnimation($('current'), 'count-changed', 520);
+      }
+      previousRenderedCount = count;
 
       $('student-count-label').textContent = students.length === 1 ? '1 student checked in' : students.length + ' students checked in';
 
       if (!students.length) {
         $('students').innerHTML = '<div class="empty"><div><strong>No students checked in</strong><span>Students will appear here as they scan in.</span></div></div>';
+        previousStudentIds = nextStudentIds;
+        hasRenderedRoster = true;
         return;
       }
 
-      $('students').innerHTML = students.map((item) => {
+      $('students').innerHTML = students.map((item, index) => {
         const checkedIn = new Date(item.checkedInAt);
         const time = Number.isNaN(checkedIn.getTime()) ? 'Unknown' : timeFormatter.format(checkedIn);
-        return '<div class="student-row">' +
+        const visitId = String(item.visitId);
+        const enteringClass = enteringStudentIds.has(visitId) ? ' is-entering' : '';
+        return '<div class="student-row' + enteringClass + '" style="--row-index:' + Math.min(index, 8) + '">' +
           '<div><div class="row-label">Student</div><div class="student-name">' + escapeHtml(item.firstName + ' ' + item.lastName) + '</div><div class="student-id">ID ' + escapeHtml(item.studentId) + '</div></div>' +
           '<div><div class="row-label">Grade</div><div class="cell">' + escapeHtml(item.grade || '') + '</div></div>' +
           '<div><div class="row-label">Reason</div><div class="cell">' + escapeHtml(item.reason) + '</div></div>' +
@@ -4625,6 +4854,8 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
           '<div><button class="danger small" data-visit="' + item.visitId + '" type="button">Check out</button></div>' +
         '</div>';
       }).join('');
+      previousStudentIds = nextStudentIds;
+      hasRenderedRoster = true;
     }
 
     function escapeHtml(text) {
@@ -4676,6 +4907,106 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       } catch (error) {
         $('sheets-status').textContent = 'Unavailable';
         $('sheets-helper').textContent = 'Could not load Google Sheets sync status.';
+      }
+    }
+
+    function dateInLibraryTimezone(value = new Date()) {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(value);
+      const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+      return dateParts.year + '-' + dateParts.month + '-' + dateParts.day;
+    }
+
+    function shiftDate(value, days) {
+      const [year, month, day] = value.split('-').map(Number);
+      const date = new Date(Date.UTC(year, month - 1, day));
+      date.setUTCDate(date.getUTCDate() + days);
+      return date.toISOString().slice(0, 10);
+    }
+
+    function updateExportDates() {
+      const range = $('export-range').value;
+      const today = dateInLibraryTimezone();
+      $('export-custom').hidden = range !== 'custom';
+
+      if (range === '7') {
+        $('export-from').value = shiftDate(today, -6);
+        $('export-to').value = today;
+      } else if (range === '30') {
+        $('export-from').value = shiftDate(today, -29);
+        $('export-to').value = today;
+      } else if (range === 'today') {
+        $('export-from').value = today;
+        $('export-to').value = today;
+      } else if (!$('export-from').value || !$('export-to').value) {
+        $('export-from').value = shiftDate(today, -6);
+        $('export-to').value = today;
+      }
+    }
+
+    function selectedExportDates() {
+      const range = $('export-range').value;
+      const today = dateInLibraryTimezone();
+      let from = today;
+      let to = today;
+
+      if (range === '7') {
+        from = shiftDate(today, -6);
+      } else if (range === '30') {
+        from = shiftDate(today, -29);
+      } else if (range === 'custom') {
+        from = $('export-from').value;
+        to = $('export-to').value;
+      }
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+        throw new Error('Choose a start and end date.');
+      }
+      if (from > to) throw new Error('The start date must be on or before the end date.');
+      return { from, to };
+    }
+
+    async function exportCsv() {
+      const button = $('export-csv');
+      let dates;
+      try {
+        dates = selectedExportDates();
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : 'Choose a valid time frame.', 'error');
+        return;
+      }
+
+      button.disabled = true;
+      setNotice('Preparing CSV...');
+      try {
+        const response = await fetch('/library/manage?api=export-csv&from=' + encodeURIComponent(dates.from) + '&to=' + encodeURIComponent(dates.to), {
+          cache: 'no-store',
+          credentials: 'same-origin',
+        });
+        const contentType = response.headers.get('content-type') || '';
+        if (!response.ok) {
+          const body = contentType.includes('application/json') ? await response.json() : {};
+          throw new Error(body.error || 'Could not export CSV.');
+        }
+
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = 'library-visits-' + dates.from + '-to-' + dates.to + '.csv';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+        setNotice('CSV exported for ' + dates.from + ' through ' + dates.to + '.', 'success');
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : 'Could not export CSV.', 'error');
+      } finally {
+        button.disabled = false;
       }
     }
 
@@ -4782,6 +5113,10 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
         $('sync').disabled = false;
       }
     });
+
+    $('export-range').addEventListener('change', updateExportDates);
+    $('export-csv').addEventListener('click', exportCsv);
+    updateExportDates();
 
     refresh();
     loadKioskDevices();
