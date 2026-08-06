@@ -1,6 +1,5 @@
--- Library check-in tables for the Weekly Wildcat signage D1 database.
--- Apply with:
--- npx wrangler d1 execute wildcat-signage --remote --file=library-schema.sql
+-- Library check-in/out tables for the Weekly Wildcat D1 database.
+-- Existing legacy status tables are intentionally left untouched; the Worker no longer reads or writes them.
 
 CREATE TABLE IF NOT EXISTS library_students (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,60 +30,6 @@ CREATE INDEX IF NOT EXISTS idx_library_visits_active
 CREATE INDEX IF NOT EXISTS idx_library_visits_student_active
   ON library_visits(student_row_id, checked_out_at);
 
-CREATE TABLE IF NOT EXISTS library_settings (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  status_mode TEXT NOT NULL DEFAULT 'auto' CHECK (status_mode IN ('auto', 'manual')),
-  manual_status TEXT NOT NULL DEFAULT 'open' CHECK (manual_status IN ('open', 'capacity', 'closed')),
-  capacity INTEGER NOT NULL DEFAULT 25,
-  custom_message TEXT NOT NULL DEFAULT '',
-  show_public_count INTEGER NOT NULL DEFAULT 1,
-  auto_capacity_enabled INTEGER NOT NULL DEFAULT 1,
-  updated_at TEXT NOT NULL,
-  updated_by TEXT NOT NULL
-);
-
-INSERT INTO library_settings (
-  id,
-  status_mode,
-  manual_status,
-  capacity,
-  custom_message,
-  show_public_count,
-  auto_capacity_enabled,
-  updated_at,
-  updated_by
-)
-VALUES (
-  1,
-  'auto',
-  'open',
-  25,
-  '',
-  1,
-  1,
-  strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-  'Library staff'
-)
-ON CONFLICT(id) DO NOTHING;
-
-CREATE TABLE IF NOT EXISTS library_app_migrations (
-  name TEXT PRIMARY KEY,
-  applied_at TEXT NOT NULL
-);
-
-UPDATE library_settings
-SET show_public_count = 1
-WHERE id = 1
-  AND NOT EXISTS (
-    SELECT 1 FROM library_app_migrations WHERE name = 'default_tv_count_on_v17'
-  );
-
-INSERT INTO library_app_migrations (name, applied_at)
-SELECT 'default_tv_count_on_v17', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-WHERE NOT EXISTS (
-  SELECT 1 FROM library_app_migrations WHERE name = 'default_tv_count_on_v17'
-);
-
 CREATE TABLE IF NOT EXISTS library_sheet_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_type TEXT NOT NULL,
@@ -95,37 +40,8 @@ CREATE TABLE IF NOT EXISTS library_sheet_events (
   last_error TEXT
 );
 
-CREATE TABLE IF NOT EXISTS library_status (
-  id INTEGER PRIMARY KEY,
-  status TEXT NOT NULL CHECK (status IN ('open', 'capacity', 'closed')),
-  message TEXT NOT NULL DEFAULT '',
-  updated_at TEXT NOT NULL,
-  updated_by TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS library_status_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  status TEXT NOT NULL CHECK (status IN ('open', 'capacity', 'closed')),
-  message TEXT NOT NULL DEFAULT '',
-  updated_at TEXT NOT NULL,
-  updated_by TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS library_open_schedule (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  opens_at TEXT,
-  time_value TEXT,
-  updated_at TEXT NOT NULL,
-  updated_by TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS library_opening_presets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  time_value TEXT NOT NULL UNIQUE,
-  label TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  created_by TEXT NOT NULL
-);
+CREATE INDEX IF NOT EXISTS idx_library_sheet_events_pending
+  ON library_sheet_events(synced_at, attempts, id);
 
 CREATE TABLE IF NOT EXISTS library_kiosk_pairing_codes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,43 +67,3 @@ CREATE TABLE IF NOT EXISTS library_kiosk_devices (
 
 CREATE INDEX IF NOT EXISTS idx_library_kiosk_devices_active
   ON library_kiosk_devices(revoked_at, last_seen_at);
-
-CREATE TABLE IF NOT EXISTS library_autopilot_presets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-  created_at TEXT NOT NULL,
-  created_by TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  updated_by TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS library_autopilot_windows (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  preset_id INTEGER NOT NULL,
-  start_time TEXT NOT NULL,
-  end_time TEXT NOT NULL,
-  sort_order INTEGER NOT NULL,
-  FOREIGN KEY (preset_id) REFERENCES library_autopilot_presets(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_library_autopilot_windows_preset
-  ON library_autopilot_windows(preset_id, sort_order);
-
-CREATE TABLE IF NOT EXISTS library_autopilot_runs (
-  run_date TEXT PRIMARY KEY,
-  preset_id INTEGER,
-  preset_name TEXT NOT NULL,
-  windows_json TEXT NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('active', 'paused', 'stopped')),
-  activated_at TEXT NOT NULL,
-  activated_by TEXT NOT NULL,
-  paused_at TEXT,
-  paused_by TEXT
-);
-
-INSERT OR IGNORE INTO library_app_migrations (name, applied_at)
-VALUES ('autopilot_v1', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
-
-INSERT INTO library_open_schedule (id, opens_at, time_value, updated_at, updated_by)
-VALUES (1, NULL, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'Library staff')
-ON CONFLICT(id) DO NOTHING;
