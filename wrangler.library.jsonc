@@ -5,6 +5,9 @@
   "compatibility_date": "2026-07-12",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
   "routes": [
     {
       "pattern": "signage.weeklywildcat.com/library/*",
@@ -12,10 +15,6 @@
     },
     {
       "pattern": "signage.weeklywildcat.com/api/library/*",
-      "zone_name": "weeklywildcat.com"
-    },
-    {
-      "pattern": "signage.weeklywildcat.com/api/signage/library*",
       "zone_name": "weeklywildcat.com"
     }
   ],

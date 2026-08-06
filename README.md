@@ -1,18 +1,21 @@
-# Wildcat Library Signage
+# Weekly Wildcat Library Check-In
 
-Standalone TypeScript Cloudflare Worker for the Weekly Wildcat library lunch signage.
+Cloudflare Worker and D1-backed check-in/out system for the Weekly Wildcat library.
 
-The public display shows the current library status, optional librarian message, and a live countdown when staff schedules a same-day opening time. The management dashboard can save reusable opening-time presets.
+The Chromebook kiosk lets students scan their ID to check in or check out. The librarian dashboard shows the live roster and count, supports librarian checkout, lets staff clear everyone out at the end of the day, and manages kiosk pairing.
 
 ## Routes
 
-- `GET /view` - public full-screen cafeteria display.
-- `GET /api/status` - public read-only status JSON.
-- `GET /manage` - Cloudflare Access-protected librarian dashboard.
-- `GET /manage/api/status` - Cloudflare Access-protected current status JSON.
-- `POST /manage/api/status` - Cloudflare Access-protected status update endpoint.
+- `GET /library/kiosk` — scanner kiosk for student check-in/out.
+- `GET /library/manage` — Cloudflare Access-protected librarian dashboard.
+- `POST /api/library/scan` — resolve a scanned student ID.
+- `POST /api/library/checkin` — record a visit.
+- `POST /api/library/checkout` — close a visit.
+- `GET /api/library/current` — staff-only live count and active roster.
+- `GET /api/library/sheet-status` — staff-only Google Sheets queue status.
+- `POST /api/library/sync-sheets` — staff-only retry for queued archive events.
 
-Cloudflare Access should protect `/manage*`. The Worker does not implement login.
+Cloudflare Access should protect `/library/manage` and staff API routes. Kiosk routes use the paired Chromebook token.
 
 ## Setup
 
@@ -22,9 +25,26 @@ Cloudflare Access should protect `/manage*`. The Worker does not implement login
    npm install
    ```
 
-2. Confirm `wrangler.jsonc` points to the `wildcat-signage` D1 database.
+2. Apply the D1 schema:
 
-3. If the D1 tables are not already present, apply `schema.sql`. The Worker also creates the schedule and opening-time preset tables if they are missing.
+   ```sh
+   npx wrangler d1 execute wildcat-signage --remote --file=library-schema.sql -c wrangler.library.jsonc
+   ```
+
+3. Configure the Google Sheets archive:
+
+   - Create or open the destination Google Sheet.
+   - Open **Extensions → Apps Script**, replace the editor contents with [`google/apps-script.gs`](google/apps-script.gs), and save it.
+   - In Apps Script **Project Settings → Script properties**, add `LIBRARY_SPREADSHEET_ID` with the spreadsheet ID and `LIBRARY_SYNC_SECRET` with a long random value.
+   - Deploy the script as a **Web app**, executing as the owner and allowing anyone with the link to access it. Copy the deployment URL.
+   - Store the deployment URL and the same secret in the Worker:
+
+     ```sh
+     npx wrangler secret put SHEETS_WEBHOOK_URL -c wrangler.library.jsonc
+     npx wrangler secret put SHEETS_WEBHOOK_SECRET -c wrangler.library.jsonc
+     ```
+
+   The receiver creates `Events` and `Visit Log` tabs automatically. Each D1 event has a sync ID, so Worker retries do not duplicate rows. The Worker attempts delivery immediately, retries pending events every five minutes, and the librarian dashboard also provides a manual **Sync now** action.
 
 4. Build:
 
@@ -32,10 +52,10 @@ Cloudflare Access should protect `/manage*`. The Worker does not implement login
    npm run build
    ```
 
-5. Deploy:
+5. Deploy the library Worker:
 
    ```sh
-   npm run deploy
+   npx wrangler deploy -c wrangler.library.jsonc
    ```
 
-The Cloudflare dashboard owns the custom domain and route setup for `https://signage.weeklywildcat.com`.
+The Worker does not maintain a separate open/closed or capacity page. Check-in/out and the live roster are the complete library workflow.
