@@ -1,16 +1,3 @@
-import {
-  deleteAutopilotPreset,
-  ensureAutopilotSchema,
-  evaluateAutopilot,
-  listAutopilotPresets,
-  saveAutopilotPreset,
-  setAutopilotRunState,
-  startAutopilot,
-  validateWindows,
-} from "./autopilot";
-
-type LibraryStatus = "open" | "capacity" | "closed";
-type StatusMode = "auto" | "manual";
 type CheckoutMethod = "scan_out" | "librarian" | "clear_all" | "auto_end_of_day";
 
 type LibraryEnv = Env & {
@@ -56,47 +43,12 @@ type VisitRow = {
   checkout_method: string | null;
 };
 
-type SettingsRow = {
-  id: number;
-  status_mode: string;
-  manual_status: string;
-  capacity: number;
-  custom_message: string | null;
-  show_public_count: number;
-  auto_capacity_enabled: number;
-  updated_at: string;
-  updated_by: string;
-};
-
-type ScheduleRow = {
-  opens_at: string | null;
-  time_value: string | null;
-};
-
-type OpeningTimePreset = {
-  id: number;
-  timeValue: string;
-  label: string;
-};
-
-type OpeningTimePresetRow = {
-  id: number;
-  time_value: string;
-  label: string;
-};
-
-type ScheduledOpen = {
-  opensAt: string;
-  timeValue: string;
-  label: string;
-};
-
 type CountRow = { count: number };
-type ExistingStatusRow = { status: string; message: string | null };
 
 type SheetEventPayload = {
   event: string;
   timestamp: string;
+  sheetEventId?: number;
   visitId?: number;
   studentId?: string;
   firstName?: string;
@@ -110,8 +62,23 @@ type SheetEventPayload = {
   actor?: string;
 };
 
+type SheetSyncSummary = {
+  configured: boolean;
+  pending: number;
+  exhausted: number;
+  lastQueuedAt: string | null;
+  lastSyncedAt: string | null;
+  lastError: string | null;
+};
+
+type SheetRetryResult = {
+  configured: boolean;
+  attempted: number;
+  synced: number;
+  failed: number;
+};
+
 const TIMEZONE = "America/New_York" as const;
-const PUBLIC_ORIGIN = "https://signage.weeklywildcat.com";
 const REASONS = [
   "Class work",
   "Printing",
@@ -216,26 +183,6 @@ export default {
         return request.method === "POST" ? handleKioskRevoke(request, env) : methodNotAllowed(["POST"]);
       }
 
-      if (pathname === "/api/library/autopilot") {
-        return request.method === "GET" ? handleAutopilotState(env) : methodNotAllowed(["GET"]);
-      }
-
-      if (pathname === "/api/library/autopilot-preset") {
-        return request.method === "POST" ? handleAutopilotPreset(request, env) : methodNotAllowed(["POST"]);
-      }
-
-      if (pathname === "/api/library/autopilot-delete") {
-        return request.method === "POST" ? handleAutopilotDelete(request, env) : methodNotAllowed(["POST"]);
-      }
-
-      if (pathname === "/api/library/autopilot-start") {
-        return request.method === "POST" ? handleAutopilotStart(request, env) : methodNotAllowed(["POST"]);
-      }
-
-      if (pathname === "/api/library/autopilot-state") {
-        return request.method === "POST" ? handleAutopilotRunState(request, env) : methodNotAllowed(["POST"]);
-      }
-
       if (pathname === "/api/library/clear") {
         return request.method === "POST" ? handleClear(request, env, ctx) : methodNotAllowed(["POST"]);
       }
@@ -244,14 +191,8 @@ export default {
         return request.method === "GET" ? json(await getCurrentState(env, true)) : methodNotAllowed(["GET"]);
       }
 
-      if (pathname === "/api/library/settings") {
-        if (request.method === "GET") {
-          return json(await getCurrentState(env, true));
-        }
-        if (request.method === "POST") {
-          return handleSettings(request, env, ctx);
-        }
-        return methodNotAllowed(["GET", "POST"]);
+      if (pathname === "/api/library/sheet-status") {
+        return request.method === "GET" ? handleSheetStatus(env) : methodNotAllowed(["GET"]);
       }
 
       if (pathname === "/api/library/import-students") {
@@ -262,15 +203,25 @@ export default {
         return request.method === "POST" ? handleSheetRetry(request, env) : methodNotAllowed(["POST"]);
       }
 
-      if (pathname === "/api/signage/library") {
-        return request.method === "GET" ? json(await getPublicSignageStatus(env)) : methodNotAllowed(["GET"]);
-      }
-
       return notFound(pathname);
     } catch (error) {
       console.error(JSON.stringify({ message: "Unhandled library app error", error: String(error) }));
       return json({ error: "Something went wrong." }, 500);
     }
+  },
+
+  async scheduled(_controller, env, ctx): Promise<void> {
+    ctx.waitUntil(
+      retryPendingSheetEvents(env, 25)
+        .then((result) => {
+          if (result.attempted > 0 || result.failed > 0) {
+            console.log(JSON.stringify({ event: "library_sheet_retry", ...result }));
+          }
+        })
+        .catch((error) => {
+          console.error(JSON.stringify({ event: "library_sheet_retry_failed", error: String(error) }));
+        })
+    );
   },
 } satisfies ExportedHandler<LibraryEnv>;
 
@@ -291,15 +242,6 @@ async function handleScan(request: Request, env: LibraryEnv): Promise<Response> 
 
   if (activeVisit) {
     return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(activeVisit), state });
-  }
-
-  if (state.status === "capacity") {
-    return json({
-      mode: "capacity",
-      student: publicStudent(student),
-      state,
-      error: "The library is currently at capacity.",
-    }, 409);
   }
 
   return json({ mode: "checkin", student: publicStudent(student), reasons: REASONS, state });
@@ -323,11 +265,6 @@ async function handleCheckin(request: Request, env: LibraryEnv, ctx: ExecutionCo
     return json({ ok: true, alreadyCheckedIn: true, visit: visitPayload(existingVisit), state: await getCurrentState(env, true) });
   }
 
-  const stateBefore = await getCurrentState(env, false);
-  if (stateBefore.status === "capacity") {
-    return json({ error: "The library is currently at capacity." }, 409);
-  }
-
   const now = new Date().toISOString();
   const result = await env.SIGNAGE_DB.prepare(
     `INSERT INTO library_visits (student_row_id, student_id, reason, checked_in_at)
@@ -349,8 +286,6 @@ async function handleCheckin(request: Request, env: LibraryEnv, ctx: ExecutionCo
     reason,
     checkIn: now,
   });
-
-  await safeSyncSignageStatus(env, "Library check-in system");
 
   return json({
     ok: true,
@@ -385,7 +320,6 @@ async function handleCheckout(request: Request, env: LibraryEnv, ctx: ExecutionC
 
   await checkoutVisit(env, visit.id, checkoutMethod, actor, now);
   const updatedVisit = await getVisitById(env, visit.id);
-  await safeSyncSignageStatus(env, actor);
 
   if (updatedVisit) {
     await queueSheetEvent(env, ctx, sheetCheckoutPayload("SIGN_OUT", updatedVisit, checkoutMethod, actor, now));
@@ -411,92 +345,7 @@ async function handleClear(request: Request, env: LibraryEnv, ctx: ExecutionCont
     await queueSheetEvent(env, ctx, sheetCheckoutPayload(method === "auto_end_of_day" ? "AUTO_CLEAR" : "CLEAR_ALL", { ...visit, checked_out_at: now, checkout_method: method }, method, actor, now));
   }
 
-  await safeSyncSignageStatus(env, actor);
   return json({ ok: true, cleared: active.length, state: await getCurrentState(env, true) });
-}
-
-async function handleSettings(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
-  const body = await readJsonBody(request);
-  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
-
-  const current = await getSettings(env);
-  const statusMode = body.statusMode === "manual" ? "manual" : body.statusMode === "auto" ? "auto" : current.status_mode;
-  const manualStatus = isLibraryStatus(body.manualStatus) ? body.manualStatus : current.manual_status;
-  const capacity = normalizeCapacity(body.capacity, current.capacity);
-  const customMessage = typeof body.customMessage === "string" ? normalizeMessage(body.customMessage, 180) : current.custom_message ?? "";
-  // v29: TV count is always shown and automatic capacity behavior is always enabled.
-  // Keep the database fields for compatibility, but stop exposing them as settings.
-  const showPublicCount = 1;
-  const autoCapacityEnabled = 1;
-  const scheduledOpenTimeValue = body.scheduledOpenTime;
-  const saveOpeningTime = body.saveOpeningTime === true;
-  const nowDate = new Date();
-  const now = nowDate.toISOString();
-  const actor = getActor(request);
-
-  if (
-    scheduledOpenTimeValue !== undefined &&
-    scheduledOpenTimeValue !== null &&
-    typeof scheduledOpenTimeValue !== "string"
-  ) {
-    return json({ error: "Scheduled open time must be a time string." }, 400);
-  }
-
-  const scheduledOpen = scheduledOpenTimeValue
-    ? resolveScheduledOpenTime(scheduledOpenTimeValue, nowDate)
-    : null;
-
-  if (scheduledOpenTimeValue && scheduledOpen === null) {
-    return json({ error: "Choose a future opening time for today." }, 400);
-  }
-
-  if (saveOpeningTime && scheduledOpen === null) {
-    return json({ error: "Choose an opening time before saving it." }, 400);
-  }
-
-  const currentScheduledOpen = await getScheduledOpen(env, nowDate);
-  const autopilotBefore = await evaluateAutopilot(env, nowDate, await getActiveCount(env), current.capacity);
-  const statusControlsChanged = statusMode !== current.status_mode || manualStatus !== current.manual_status;
-  const quickScheduleChanged = (scheduledOpen?.timeValue ?? null) !== (currentScheduledOpen?.timeValue ?? null);
-  if (autopilotBefore.status === "running" && (statusControlsChanged || quickScheduleChanged)) {
-    await setAutopilotRunState(env, "paused", getActor(request), nowDate);
-  }
-
-  await env.SIGNAGE_DB.prepare(
-    `UPDATE library_settings
-     SET status_mode = ?, manual_status = ?, capacity = ?, custom_message = ?, show_public_count = ?, auto_capacity_enabled = ?, updated_at = ?, updated_by = ?
-     WHERE id = 1`
-  ).bind(statusMode, manualStatus, capacity, customMessage, showPublicCount, autoCapacityEnabled, now, actor).run();
-
-  const scheduleStatements = [
-    env.SIGNAGE_DB.prepare(
-      `INSERT INTO library_open_schedule (id, opens_at, time_value, updated_at, updated_by)
-       VALUES (1, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET opens_at = excluded.opens_at, time_value = excluded.time_value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
-    ).bind(scheduledOpen?.opensAt ?? null, scheduledOpen?.timeValue ?? null, now, actor),
-  ];
-
-  if (saveOpeningTime && scheduledOpen !== null) {
-    scheduleStatements.push(
-      env.SIGNAGE_DB.prepare(
-        `INSERT INTO library_opening_presets (time_value, label, created_at, created_by)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(time_value) DO UPDATE SET label = excluded.label`
-      ).bind(scheduledOpen.timeValue, scheduledOpen.label, now, actor),
-    );
-  }
-
-  await env.SIGNAGE_DB.batch(scheduleStatements);
-
-  await queueSheetEvent(env, ctx, {
-    event: "SETTINGS_CHANGED",
-    timestamp: now,
-    actor,
-    reason: `mode=${statusMode}; manual=${manualStatus}; capacity=${capacity}; opens=${scheduledOpen?.label ?? "none"}`,
-  });
-
-  await safeSyncSignageStatus(env, actor);
-  return json({ ok: true, state: await getCurrentState(env, true) });
 }
 
 async function handleCreateStudent(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
@@ -676,68 +525,6 @@ async function handleKioskRevoke(request: Request, env: LibraryEnv): Promise<Res
   return json({ ok: true });
 }
 
-async function handleAutopilotState(env: LibraryEnv): Promise<Response> {
-  await ensureAutopilotSchema(env);
-  const settings = await getSettings(env);
-  const count = await getActiveCount(env);
-  return json({
-    presets: await listAutopilotPresets(env),
-    run: await evaluateAutopilot(env, new Date(), count, settings.capacity),
-  });
-}
-
-async function handleAutopilotPreset(request: Request, env: LibraryEnv): Promise<Response> {
-  await ensureAutopilotSchema(env);
-  const body = await readJsonBody(request);
-  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
-  const name = normalizeString(body.name, 80);
-  if (!name) return json({ error: "Enter a preset name." }, 400);
-  const id = Number(body.id);
-  const presetId = Number.isInteger(id) && id > 0 ? id : null;
-  try {
-    const windows = validateWindows(body.windows);
-    const savedId = await saveAutopilotPreset(env, presetId, name, windows, getActor(request));
-    return json({ ok: true, id: savedId });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not save Autopilot preset.";
-    return json({ error: message.includes("UNIQUE") ? "Preset names must be unique." : message }, 400);
-  }
-}
-
-async function handleAutopilotDelete(request: Request, env: LibraryEnv): Promise<Response> {
-  await ensureAutopilotSchema(env);
-  const body = await readJsonBody(request);
-  const presetId = isRecord(body) ? Number(body.presetId) : NaN;
-  if (!Number.isInteger(presetId) || presetId < 1) return json({ error: "Choose a preset to delete." }, 400);
-  await deleteAutopilotPreset(env, presetId);
-  return json({ ok: true });
-}
-
-async function handleAutopilotStart(request: Request, env: LibraryEnv): Promise<Response> {
-  await ensureAutopilotSchema(env);
-  const body = await readJsonBody(request);
-  const presetId = isRecord(body) ? Number(body.presetId) : NaN;
-  if (!Number.isInteger(presetId) || presetId < 1) return json({ error: "Choose an Autopilot preset." }, 400);
-  await startAutopilot(env, presetId, getActor(request));
-  await safeSyncSignageStatus(env, getActor(request));
-  return handleAutopilotState(env);
-}
-
-async function handleAutopilotRunState(request: Request, env: LibraryEnv): Promise<Response> {
-  await ensureAutopilotSchema(env);
-  const body = await readJsonBody(request);
-  const action = isRecord(body) && typeof body.action === "string" ? body.action : "";
-  const state = action === "resume" ? "active" : action === "pause" ? "paused" : action === "stop" ? "stopped" : null;
-  if (!state) return json({ error: "Invalid Autopilot action." }, 400);
-  try {
-    await setAutopilotRunState(env, state, getActor(request));
-    await safeSyncSignageStatus(env, getActor(request));
-    return handleAutopilotState(env);
-  } catch (error) {
-    return json({ error: error instanceof Error ? error.message : "Could not update Autopilot." }, 400);
-  }
-}
-
 function publicKioskDevice(row: KioskDeviceRow) {
   return {
     id: row.id,
@@ -792,13 +579,37 @@ async function handleStudentImport(request: Request, env: LibraryEnv): Promise<R
   return json({ ok: true, imported, skipped });
 }
 
+async function handleSheetStatus(env: LibraryEnv): Promise<Response> {
+  return json({ ok: true, ...(await getSheetSyncSummary(env)) });
+}
+
 async function handleSheetRetry(_request: Request, env: LibraryEnv): Promise<Response> {
+  const result = await retryPendingSheetEvents(env, 25, true);
+  const summary = await getSheetSyncSummary(env);
+
+  if (!result.configured) {
+    return json({
+      ok: false,
+      error: "Google Sheets sync is not configured. Add SHEETS_WEBHOOK_URL and SHEETS_WEBHOOK_SECRET to the Worker.",
+      ...result,
+      ...summary,
+    }, 503);
+  }
+
+  return json({ ok: true, ...result, ...summary });
+}
+
+async function retryPendingSheetEvents(env: LibraryEnv, limit: number, includeExhausted = false): Promise<SheetRetryResult> {
+  if (!isSheetSyncConfigured(env)) {
+    return { configured: false, attempted: 0, synced: 0, failed: 0 };
+  }
+
   const rows = await env.SIGNAGE_DB.prepare(
     `SELECT id, payload_json FROM library_sheet_events
-     WHERE synced_at IS NULL AND attempts < 10
+     WHERE synced_at IS NULL${includeExhausted ? "" : " AND attempts < 10"}
      ORDER BY id ASC
-     LIMIT 25`
-  ).all<{ id: number; payload_json: string }>();
+     LIMIT ?`
+  ).bind(Math.max(1, Math.min(Math.floor(limit), 100))).all<{ id: number; payload_json: string }>();
 
   let synced = 0;
   let failed = 0;
@@ -809,7 +620,35 @@ async function handleSheetRetry(_request: Request, env: LibraryEnv): Promise<Res
     else failed += 1;
   }
 
-  return json({ ok: true, attempted: rows.results.length, synced, failed });
+  return { configured: true, attempted: rows.results.length, synced, failed };
+}
+
+async function getSheetSyncSummary(env: LibraryEnv): Promise<SheetSyncSummary> {
+  const row = await env.SIGNAGE_DB.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM library_sheet_events WHERE synced_at IS NULL AND attempts < 10) AS pending,
+       (SELECT COUNT(*) FROM library_sheet_events WHERE synced_at IS NULL AND attempts >= 10) AS exhausted,
+       (SELECT MAX(created_at) FROM library_sheet_events) AS last_queued_at,
+       (SELECT MAX(synced_at) FROM library_sheet_events) AS last_synced_at,
+       (SELECT last_error FROM library_sheet_events
+        WHERE synced_at IS NULL AND last_error IS NOT NULL
+        ORDER BY id DESC LIMIT 1) AS last_error`
+  ).first<{
+    pending: number;
+    exhausted: number;
+    last_queued_at: string | null;
+    last_synced_at: string | null;
+    last_error: string | null;
+  }>();
+
+  return {
+    configured: isSheetSyncConfigured(env),
+    pending: row?.pending ?? 0,
+    exhausted: row?.exhausted ?? 0,
+    lastQueuedAt: row?.last_queued_at ?? null,
+    lastSyncedAt: row?.last_synced_at ?? null,
+    lastError: row?.last_error ? row.last_error.slice(0, 240) : null,
+  };
 }
 
 async function findStudentByBarcode(env: LibraryEnv, barcode: string): Promise<StudentRow | null> {
@@ -865,124 +704,16 @@ async function checkoutVisit(env: LibraryEnv, visitId: number, method: CheckoutM
 }
 
 async function getCurrentState(env: LibraryEnv, includeStudents: boolean) {
-  const settings = await getSettings(env);
   const currentCount = await getActiveCount(env);
   const activeVisits = includeStudents ? await getActiveVisits(env) : [];
-  const now = new Date();
-  const autopilot = await evaluateAutopilot(env, now, currentCount, settings.capacity);
-  const status = autopilot.effectiveStatus ?? resolveBaseLibraryStatus(settings, currentCount);
-  const autopilotScheduledOpen: ScheduledOpen | null = !autopilot.currentWindow && autopilot.nextOpenAt && autopilot.nextWindow
-    ? { opensAt: autopilot.nextOpenAt, timeValue: autopilot.nextWindow.start, label: formatTimeValue(autopilot.nextWindow.start) }
-    : null;
-  const legacyScheduledOpen = await getScheduledOpen(env, now);
+  const generatedAt = new Date().toISOString();
 
   return {
-    status,
-    statusLabel: statusLabel(status),
     currentCount,
-    capacity: settings.capacity,
-    statusMode: settings.status_mode,
-    manualStatus: settings.manual_status,
-    customMessage: settings.custom_message ?? "",
-    showPublicCount: true,
-    autoCapacityEnabled: true,
-    scheduledOpen: autopilot.status === "running" ? autopilotScheduledOpen : autopilot.status === "finished" ? null : legacyScheduledOpen,
-    autopilot,
-    openingTimePresets: await getOpeningTimePresets(env),
-    updatedAt: settings.updated_at,
-    updatedBy: settings.updated_by,
+    inLibraryCount: currentCount,
+    generatedAt,
     timezone: TIMEZONE,
-    generatedAt: now.toISOString(),
     students: activeVisits.map(visitPayload),
-  };
-}
-
-export async function getPublicSignageStatus(env: LibraryEnv) {
-  const state = await getCurrentState(env, false);
-  return {
-    status: state.status,
-    statusLabel: state.statusLabel,
-    currentCount: state.currentCount,
-    capacity: state.capacity,
-    message: state.customMessage,
-    scheduledOpen: state.scheduledOpen,
-    updatedAt: state.updatedAt,
-    updatedBy: state.updatedBy,
-    timezone: TIMEZONE,
-    generatedAt: state.generatedAt,
-  };
-}
-
-async function syncSignageStatus(env: LibraryEnv, actor: string): Promise<void> {
-  const settings = await getSettings(env);
-  const count = await getActiveCount(env);
-  const autopilot = await evaluateAutopilot(env, new Date(), count, settings.capacity);
-  const status = autopilot.effectiveStatus ?? resolveBaseLibraryStatus(settings, count);
-  const message = settings.custom_message ?? "";
-  const updatedAt = new Date().toISOString();
-
-  await env.SIGNAGE_DB.batch([
-    env.SIGNAGE_DB.prepare(
-      `INSERT INTO library_status (id, status, message, updated_at, updated_by)
-       VALUES (1, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET status = excluded.status, message = excluded.message, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
-    ).bind(status, message, updatedAt, actor),
-    env.SIGNAGE_DB.prepare(
-      `INSERT INTO library_status_history (status, message, updated_at, updated_by)
-       VALUES (?, ?, ?, ?)`
-    ).bind(status, message, updatedAt, actor),
-  ]);
-}
-
-async function safeSyncSignageStatus(env: LibraryEnv, actor: string): Promise<void> {
-  try {
-    await syncSignageStatus(env, actor);
-  } catch (error) {
-    console.error(JSON.stringify({
-      event: "library_signage_sync_failed",
-      actor,
-      error: error instanceof Error ? error.message : String(error),
-    }));
-  }
-}
-
-function resolveBaseLibraryStatus(settings: SettingsRow, currentCount: number): LibraryStatus {
-  if (settings.status_mode === "manual") {
-    return isLibraryStatus(settings.manual_status) ? settings.manual_status : "closed";
-  }
-
-  if (settings.capacity > 0 && currentCount >= settings.capacity) {
-    return "capacity";
-  }
-
-  return "open";
-}
-
-async function getSettings(env: LibraryEnv): Promise<SettingsRow> {
-  const row = await env.SIGNAGE_DB.prepare(
-    `SELECT id, status_mode, manual_status, capacity, custom_message, show_public_count, auto_capacity_enabled, updated_at, updated_by
-     FROM library_settings
-     WHERE id = 1`
-  ).first<SettingsRow>();
-
-  if (row) return row;
-
-  const now = new Date().toISOString();
-  await env.SIGNAGE_DB.prepare(
-    `INSERT INTO library_settings (id, status_mode, manual_status, capacity, custom_message, show_public_count, auto_capacity_enabled, updated_at, updated_by)
-     VALUES (1, 'auto', 'open', 25, '', 1, 1, ?, 'Library staff')`
-  ).bind(now).run();
-
-  return {
-    id: 1,
-    status_mode: "auto",
-    manual_status: "open",
-    capacity: 25,
-    custom_message: "",
-    show_public_count: 1,
-    auto_capacity_enabled: 1,
-    updated_at: now,
-    updated_by: "Library staff",
   };
 }
 
@@ -1013,23 +744,39 @@ async function queueSheetEvent(env: LibraryEnv, ctx: ExecutionContext, payload: 
 }
 
 async function sendSheetEvent(env: LibraryEnv, eventId: number, payloadJson: string): Promise<boolean> {
-  if (!env.SHEETS_WEBHOOK_URL || !env.SHEETS_WEBHOOK_SECRET) {
+  if (!isSheetSyncConfigured(env)) {
     return false;
   }
 
   try {
-    const response = await fetch(env.SHEETS_WEBHOOK_URL, {
+    const webhookUrl = new URL(env.SHEETS_WEBHOOK_URL!);
+    webhookUrl.searchParams.set("secret", env.SHEETS_WEBHOOK_SECRET!);
+    const payload = JSON.parse(payloadJson);
+    if (!isRecord(payload)) throw new Error("Queued Sheets payload is not an object.");
+
+    const response = await fetch(webhookUrl, {
       method: "POST",
       signal: AbortSignal.timeout(5000),
       headers: {
         "Content-Type": "application/json",
-        "X-Library-Sync-Secret": env.SHEETS_WEBHOOK_SECRET,
+        "X-Library-Sync-Secret": env.SHEETS_WEBHOOK_SECRET!,
       },
-      body: payloadJson,
+      body: JSON.stringify({ ...payload, sheetEventId: eventId }),
     });
 
-    if (!response.ok) {
-      throw new Error(`Sheets webhook returned ${response.status}`);
+    const responseText = await response.text();
+    let responseBody: unknown = null;
+    try {
+      responseBody = JSON.parse(responseText);
+    } catch {
+      // The receiver must return JSON so that a 200 response cannot mask a rejected event.
+    }
+    if (!response.ok) throw new Error(`Sheets webhook returned ${response.status}`);
+    if (!isRecord(responseBody) || responseBody.ok !== true) {
+      const detail = isRecord(responseBody) && typeof responseBody.error === "string"
+        ? responseBody.error
+        : "receiver returned an invalid response";
+      throw new Error(`Sheets webhook rejected event: ${detail}`);
     }
 
     await env.SIGNAGE_DB.prepare(
@@ -1047,6 +794,10 @@ async function sendSheetEvent(env: LibraryEnv, eventId: number, payloadJson: str
     ).bind(String(error), eventId).run();
     return false;
   }
+}
+
+function isSheetSyncConfigured(env: LibraryEnv): boolean {
+  return Boolean(env.SHEETS_WEBHOOK_URL?.trim() && env.SHEETS_WEBHOOK_SECRET?.trim());
 }
 
 function sheetCheckoutPayload(event: string, visit: VisitRow, method: string, actor: string, timestamp: string): SheetEventPayload {
@@ -1099,7 +850,6 @@ function durationMinutes(startIso: string, endIso: string): number | null {
 }
 
 async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
-  const now = new Date().toISOString();
   await env.SIGNAGE_DB.batch([
     env.SIGNAGE_DB.prepare(
       `CREATE TABLE IF NOT EXISTS library_students (
@@ -1133,41 +883,6 @@ async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_library_visits_student_active ON library_visits(student_row_id, checked_out_at)`
     ),
     env.SIGNAGE_DB.prepare(
-      `CREATE TABLE IF NOT EXISTS library_settings (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        status_mode TEXT NOT NULL DEFAULT 'auto' CHECK (status_mode IN ('auto', 'manual')),
-        manual_status TEXT NOT NULL DEFAULT 'open' CHECK (manual_status IN ('open', 'capacity', 'closed')),
-        capacity INTEGER NOT NULL DEFAULT 25,
-        custom_message TEXT NOT NULL DEFAULT '',
-        show_public_count INTEGER NOT NULL DEFAULT 1,
-        auto_capacity_enabled INTEGER NOT NULL DEFAULT 1,
-        updated_at TEXT NOT NULL,
-        updated_by TEXT NOT NULL
-      )`
-    ),
-    env.SIGNAGE_DB.prepare(
-      `INSERT INTO library_settings (id, status_mode, manual_status, capacity, custom_message, show_public_count, auto_capacity_enabled, updated_at, updated_by)
-       VALUES (1, 'auto', 'open', 25, '', 1, 1, ?, 'Library staff')
-       ON CONFLICT(id) DO NOTHING`
-    ).bind(now),
-    env.SIGNAGE_DB.prepare(
-      `CREATE TABLE IF NOT EXISTS library_app_migrations (
-        name TEXT PRIMARY KEY,
-        applied_at TEXT NOT NULL
-      )`
-    ),
-    env.SIGNAGE_DB.prepare(
-      `UPDATE library_settings
-       SET show_public_count = 1
-       WHERE id = 1
-         AND NOT EXISTS (SELECT 1 FROM library_app_migrations WHERE name = 'default_tv_count_on_v17')`
-    ),
-    env.SIGNAGE_DB.prepare(
-      `INSERT INTO library_app_migrations (name, applied_at)
-       SELECT 'default_tv_count_on_v17', ?
-       WHERE NOT EXISTS (SELECT 1 FROM library_app_migrations WHERE name = 'default_tv_count_on_v17')`
-    ).bind(now),
-    env.SIGNAGE_DB.prepare(
       `CREATE TABLE IF NOT EXISTS library_sheet_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_type TEXT NOT NULL,
@@ -1179,40 +894,7 @@ async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
       )`
     ),
     env.SIGNAGE_DB.prepare(
-      `CREATE TABLE IF NOT EXISTS library_status (
-        id INTEGER PRIMARY KEY,
-        status TEXT NOT NULL CHECK (status IN ('open', 'capacity', 'closed')),
-        message TEXT NOT NULL DEFAULT '',
-        updated_at TEXT NOT NULL,
-        updated_by TEXT NOT NULL
-      )`
-    ),
-    env.SIGNAGE_DB.prepare(
-      `CREATE TABLE IF NOT EXISTS library_status_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        status TEXT NOT NULL CHECK (status IN ('open', 'capacity', 'closed')),
-        message TEXT NOT NULL DEFAULT '',
-        updated_at TEXT NOT NULL,
-        updated_by TEXT NOT NULL
-      )`
-    ),
-    env.SIGNAGE_DB.prepare(
-      `CREATE TABLE IF NOT EXISTS library_open_schedule (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        opens_at TEXT,
-        time_value TEXT,
-        updated_at TEXT NOT NULL,
-        updated_by TEXT NOT NULL
-      )`
-    ),
-    env.SIGNAGE_DB.prepare(
-      `CREATE TABLE IF NOT EXISTS library_opening_presets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        time_value TEXT NOT NULL UNIQUE,
-        label TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        created_by TEXT NOT NULL
-      )`
+      "CREATE INDEX IF NOT EXISTS idx_library_sheet_events_pending ON library_sheet_events(synced_at, attempts, id)"
     ),
     env.SIGNAGE_DB.prepare(
       `CREATE TABLE IF NOT EXISTS library_kiosk_pairing_codes (
@@ -1242,123 +924,7 @@ async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_library_kiosk_devices_active
        ON library_kiosk_devices(revoked_at, last_seen_at)`
     ),
-    env.SIGNAGE_DB.prepare(
-      `INSERT INTO library_open_schedule (id, opens_at, time_value, updated_at, updated_by)
-       VALUES (1, NULL, NULL, ?, 'Library staff')
-       ON CONFLICT(id) DO NOTHING`
-    ).bind(now),
   ]);
-}
-
-async function getScheduledOpen(env: LibraryEnv, now: Date): Promise<ScheduledOpen | null> {
-  const row = await env.SIGNAGE_DB.prepare(
-    "SELECT opens_at, time_value FROM library_open_schedule WHERE id = 1"
-  ).first<ScheduleRow>();
-
-  if (!row?.opens_at || !row.time_value) return null;
-
-  const opensAtDate = new Date(row.opens_at);
-  if (Number.isNaN(opensAtDate.getTime()) || opensAtDate.getTime() <= now.getTime()) {
-    return null;
-  }
-
-  return {
-    opensAt: opensAtDate.toISOString(),
-    timeValue: row.time_value,
-    label: formatTimeValue(row.time_value),
-  };
-}
-
-async function getOpeningTimePresets(env: LibraryEnv): Promise<OpeningTimePreset[]> {
-  const result = await env.SIGNAGE_DB.prepare(
-    "SELECT id, time_value, label FROM library_opening_presets ORDER BY time_value ASC"
-  ).all<OpeningTimePresetRow>();
-
-  return result.results.map((row) => ({
-    id: row.id,
-    timeValue: row.time_value,
-    label: row.label,
-  }));
-}
-
-function resolveScheduledOpenTime(timeValue: string, now: Date): ScheduledOpen | null {
-  const normalizedTime = normalizeTimeValue(timeValue);
-  if (normalizedTime === null) return null;
-
-  const opensAt = newYorkDateTimeToUtc(newYorkDateKey(now), normalizedTime);
-  if (opensAt.getTime() <= now.getTime()) return null;
-
-  return {
-    opensAt: opensAt.toISOString(),
-    timeValue: normalizedTime,
-    label: formatTimeValue(normalizedTime),
-  };
-}
-
-function normalizeTimeValue(timeValue: string): string | null {
-  const match = /^(?:([01]\d|2[0-3]):([0-5]\d))$/.exec(timeValue.trim());
-  return match ? `${match[1]}:${match[2]}` : null;
-}
-
-function formatTimeValue(timeValue: string): string {
-  const normalizedTime = normalizeTimeValue(timeValue);
-  if (normalizedTime === null) return timeValue;
-  const [hourPart, minutePart] = normalizedTime.split(":");
-  const hour = Number(hourPart);
-  const suffix = hour >= 12 ? "PM" : "AM";
-  const hour12 = hour % 12 || 12;
-  return `${hour12}:${minutePart} ${suffix}`;
-}
-
-function newYorkDateTimeToUtc(dateKey: string, timeValue: string): Date {
-  const [year, month, day] = dateKey.split("-").map(Number);
-  const [hour, minute] = timeValue.split(":").map(Number);
-  let utcMillis = Date.UTC(year, month - 1, day, hour, minute);
-
-  for (let index = 0; index < 2; index += 1) {
-    utcMillis = Date.UTC(year, month - 1, day, hour, minute) - getNewYorkOffsetMillis(new Date(utcMillis));
-  }
-
-  return new Date(utcMillis);
-}
-
-function getNewYorkOffsetMillis(date: Date): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: TIMEZONE,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(date);
-
-  const getPart = (type: string): number => Number(parts.find((part) => part.type === type)?.value ?? "0");
-  const asUtcMillis = Date.UTC(
-    getPart("year"),
-    getPart("month") - 1,
-    getPart("day"),
-    getPart("hour"),
-    getPart("minute"),
-    getPart("second"),
-  );
-
-  return asUtcMillis - date.getTime();
-}
-
-function newYorkDateKey(date: Date): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-
-  const year = parts.find((part) => part.type === "year")?.value ?? "0000";
-  const month = parts.find((part) => part.type === "month")?.value ?? "00";
-  const day = parts.find((part) => part.type === "day")?.value ?? "00";
-  return `${year}-${month}-${day}`;
 }
 
 async function readJsonBody(request: Request): Promise<unknown> {
@@ -1396,23 +962,8 @@ function normalizeMessage(value: string, maxLength: number): string {
   return value.trim().replace(/\s+/g, " ").slice(0, maxLength);
 }
 
-function normalizeCapacity(value: unknown, fallback: number): number {
-  const raw = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-  if (!Number.isFinite(raw)) return fallback;
-  return Math.max(1, Math.min(500, Math.floor(raw)));
-}
-
-function isLibraryStatus(value: unknown): value is LibraryStatus {
-  return value === "open" || value === "capacity" || value === "closed";
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function statusLabel(status: LibraryStatus): string {
-  if (status === "capacity") return "At Capacity";
-  return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
 function getActor(request: Request): string {
@@ -4931,29 +4482,18 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
         <div class="subtle">Control Center</div>
       </div>
       <div class="top-actions">
-        <button class="secondary small" id="refresh" type="button" title="Reload the live roster and TV status without changing anything.">Refresh</button>
+        <button class="secondary small" id="refresh" type="button" title="Reload the live roster without changing anything.">Refresh</button>
         <button class="danger small" id="clear-all" type="button" title="Check out every student currently in the library. This cannot be undone." disabled>Check everyone out</button>
       </div>
     </header>
 
     <main class="workspace">
       <div class="roster-stack">
-  <section class="statusbar" aria-label="Current library status">
+  <section class="statusbar" aria-label="Current library count">
         <div class="stat primary-stat">
           <div class="label">In library</div>
-          <div class="value" id="current">0 / 25</div>
-          <div class="capacity-meter" aria-hidden="true"><span id="capacity-meter-fill"></span></div>
-        </div>
-        <div class="stat tv-display-stat">
-          <div class="label">TV display</div>
-          <div class="tv-display-stack">
-            <div class="value"><span class="status-inline"><span class="dot" id="status-dot" data-status="closed"></span><span id="status">Closed</span></span></div>
-            <div class="status-subline" id="mode">Automatic</div>
-          </div>
-        </div>
-        <div class="stat">
-          <div class="label">Scheduled open</div>
-          <div class="value" id="scheduled-summary">Not scheduled</div>
+          <div class="value" id="current">0 students</div>
+          <div class="status-subline">Live check-in count</div>
         </div>
       </section>
 
@@ -4981,85 +4521,14 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       <aside class="panel settings-panel">
         <div class="panel-title">
           <div>
-            <h2>Controls</h2>
-            <div class="panel-note">Changes apply when you save.</div>
+            <h2>Check-in &amp; checkout</h2>
+            <div class="panel-note">Manage the live library roster.</div>
           </div>
         </div>
         <div class="control-body">
-          <section class="group capacity-group">
-            <div class="group-head"><h3>Capacity</h3><span class="hint" id="capacity-hint">0 spots available</span></div>
-            <div class="field">
-              <label for="capacity">Limit</label>
-              <input id="capacity" type="number" min="1" max="500" inputmode="numeric">
-            </div>
-          </section>
-
-          <section class="group tv-display-group">
-            <div class="group-head"><h3>Library status</h3><span class="hint" id="status-hint">Automatic status control</span></div>
-            <div class="field">
-              <div class="fake-label">Status control</div>
-              <div class="seg status-control" role="radiogroup" aria-label="Status control">
-                <label><input type="radio" name="status-mode" value="auto"><span>Automatic</span></label>
-                <label><input type="radio" name="status-mode" value="manual"><span>Manual override</span></label>
-              </div>
-              <div class="setting-helper" id="status-mode-helper">The system shows Open, Full, or Closed based on the library rules.</div>
-            </div>
-            <div class="field manual-status-control" id="manual-status-field" data-disabled="false">
-              <div class="fake-label">TV status</div>
-              <div class="seg three" role="radiogroup" aria-label="TV status">
-                <label><input type="radio" name="manual-status" value="open"><span>Open</span></label>
-                <label><input type="radio" name="manual-status" value="capacity"><span>Full</span></label>
-                <label><input type="radio" name="manual-status" value="closed"><span>Closed</span></label>
-              </div>
-              <div class="mode-helper" id="manual-status-helper">Manual TV status is disabled while Automatic mode is on.</div>
-            </div>
-          </section>
-
-          <section class="group autopilot-group">
-            <div class="group-head"><h3>Autopilot</h3><span class="autopilot-status" id="autopilot-status" data-state="off">Off</span></div>
-            <div class="setting-helper">Run a saved set of opening windows for today. The library closes automatically between windows.</div>
-            <div class="field">
-              <label for="autopilot-preset">Day preset</label>
-              <select id="autopilot-preset"><option value="">Choose a preset</option></select>
-            </div>
-            <div class="autopilot-actions">
-              <button id="autopilot-start" type="button">Turn on Autopilot</button>
-              <button class="secondary" id="autopilot-pause" type="button" hidden>Pause</button>
-              <button id="autopilot-resume" type="button" hidden>Resume</button>
-              <button class="secondary" id="autopilot-stop" type="button" hidden>Turn off</button>
-            </div>
-            <div class="autopilot-summary" id="autopilot-summary">Create a preset to get started.</div>
-            <div class="autopilot-editor">
-              <div class="field"><label for="autopilot-name">Preset name</label><input id="autopilot-name" maxlength="80" placeholder="Regular Day"></div>
-              <div class="autopilot-windows" id="autopilot-windows"></div>
-              <button class="secondary" id="autopilot-add-window" type="button">Add opening window</button>
-              <div class="autopilot-editor-actions">
-                <button id="autopilot-save" type="button">Save preset</button>
-                <button class="danger" id="autopilot-delete" type="button" disabled>Delete</button>
-              </div>
-            </div>
-          </section>
-
           <section class="group">
-            <div class="group-head"><h3>Opening time</h3><span class="hint" id="schedule-hint">No time set</span></div>
-            <div class="preset-row">
-              <div class="field">
-                <label for="preset">Saved time</label>
-                <select id="preset"><option value="">Choose saved time</option></select>
-              </div>
-              <div class="field">
-                <label for="opening-time">Open at</label>
-                <input id="opening-time" type="time">
-              </div>
-            </div>
-            <label class="checkline" for="save-opening-time"><input id="save-opening-time" type="checkbox">Save this time for reuse</label>
-          </section>
-
-          <section class="group tv-message-group">
-            <div class="field">
-              <label for="message">TV message</label>
-              <textarea id="message" maxlength="180" placeholder="Optional"></textarea>
-            </div>
+            <div class="group-head"><h3>Live roster</h3><span class="hint">Refreshes automatically</span></div>
+            <div class="setting-helper">Students check in at the kiosk. Use the checkout buttons in the roster when someone leaves or needs help.</div>
           </section>
 
           <section class="group kiosk-group">
@@ -5080,17 +4549,13 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
             </div>
           </section>
 
+          <section class="group">
+            <div class="group-head"><h3>Google Sheets archive</h3><span class="hint" id="sheets-status">Checking…</span></div>
+            <div class="setting-helper" id="sheets-helper">Check-in and checkout events are queued in D1 and delivered automatically. Use this button to retry anything still waiting.</div>
+            <button class="secondary" id="sync" type="button" title="Retry queued check-in and checkout events.">Sync now</button>
+          </section>
+          <div class="notice" id="notice" role="status" aria-live="polite"></div>
         </div>
-        <section class="savebar">
-            <div class="save-buttons">
-              <button id="save" type="button" title="Apply these settings and update the TV display.">Apply changes</button>
-              <button class="secondary" id="reset" type="button" title="Discard unsaved changes and reload the current settings.">Reset</button>
-            </div>
-            <div class="save-meta">
-              <div class="notice" id="notice" role="status" aria-live="polite"></div>
-              <button class="tertiary" id="sync" type="button" title="Retry any queued Google Sheets archive events.">Sync Google Sheets</button>
-            </div>
-        </section>
       </aside>
     </main>
   </div>
@@ -5100,11 +4565,9 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
     const timeFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
     const dateTimeFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     const manualRefreshCooldownMs = 5000;
-    let latestState = null;
     let latestStudentCount = 0;
     let refreshPromise = null;
     let lastRefreshStartedAt = 0;
-    let autopilotData = { presets: [], run: { status: 'off' } };
 
     async function api(url, options = {}) {
       const controller = new AbortController();
@@ -5131,157 +4594,27 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       return api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     }
 
-    function checkedValue(name) {
-      return document.querySelector('input[name="' + name + '"]:checked')?.value || '';
-    }
-
-    function setChecked(name, value) {
-      const input = document.querySelector('input[name="' + name + '"][value="' + String(value) + '"]');
-      if (input) input.checked = true;
-    }
-
     function setNotice(text, tone = '') {
       $('notice').textContent = text;
       $('notice').dataset.tone = tone;
     }
 
-    function updateManualStatusAvailability(mode) {
-      const isManual = mode === 'manual';
-      const field = $('manual-status-field');
-      if (!field) return;
-      field.dataset.disabled = isManual ? 'false' : 'true';
-      document.querySelectorAll('input[name="manual-status"]').forEach((input) => {
-        input.disabled = !isManual;
-      });
-      const helper = $('status-mode-helper');
-      if (helper) {
-        helper.textContent = isManual
-          ? 'The librarian chooses what the TV shows.'
-          : 'The system shows Open, Full, or Closed based on the library rules.';
-      }
-    }
-
-    function renderPresets(presets, selectedTime) {
-      $('preset').innerHTML = '<option value="">Choose saved time</option>' + (presets || [])
-        .map((item) => '<option value="' + escapeHtml(item.timeValue) + '">' + escapeHtml(item.label) + '</option>')
-        .join('');
-      $('preset').value = selectedTime || '';
-    }
-
-    function formatScheduled(summary) {
-      if (!summary) return 'Not scheduled';
-      return summary.label || 'Scheduled';
-    }
-
-    function formatWindowTime(value) {
-      const parts = String(value || '').split(':');
-      const date = new Date(2000, 0, 1, Number(parts[0] || 0), Number(parts[1] || 0));
-      return timeFormatter.format(date);
-    }
-
-    function addAutopilotWindow(windowValue = { start: '', end: '' }) {
-      const row = document.createElement('div');
-      row.className = 'autopilot-window';
-      row.innerHTML = '<div class="field"><label>Opens</label><input type="time" data-autopilot-start value="' + escapeHtml(windowValue.start || '') + '"></div>' +
-        '<div class="field"><label>Closes</label><input type="time" data-autopilot-end value="' + escapeHtml(windowValue.end || '') + '"></div>' +
-        '<button type="button" data-remove-window aria-label="Remove opening window">×</button>';
-      $('autopilot-windows').appendChild(row);
-    }
-
-    function editAutopilotPreset(preset) {
-      $('autopilot-name').value = preset ? preset.name : '';
-      $('autopilot-windows').innerHTML = '';
-      const windows = preset && preset.windows && preset.windows.length ? preset.windows : [{ start: '', end: '' }];
-      windows.forEach(addAutopilotWindow);
-      $('autopilot-delete').disabled = !preset;
-    }
-
-    function renderAutopilot(data) {
-      autopilotData = data || { presets: [], run: { status: 'off' } };
-      const select = $('autopilot-preset');
-      const previous = select.value;
-      select.innerHTML = '<option value="">Choose a preset</option>' + (autopilotData.presets || [])
-        .map((preset) => '<option value="' + preset.id + '">' + escapeHtml(preset.name) + '</option>').join('');
-      const run = autopilotData.run || { status: 'off' };
-      const activePreset = run.presetName ? (autopilotData.presets || []).find((preset) => preset.name === run.presetName) : null;
-      select.value = activePreset ? String(activePreset.id) : ((autopilotData.presets || []).some((preset) => String(preset.id) === previous) ? previous : '');
-      $('autopilot-status').dataset.state = run.status || 'off';
-      $('autopilot-status').textContent = (run.status || 'off').replace(/^./, (value) => value.toUpperCase());
-      $('autopilot-start').hidden = run.status === 'running';
-      $('autopilot-pause').hidden = run.status !== 'running';
-      $('autopilot-resume').hidden = run.status !== 'paused';
-      $('autopilot-stop').hidden = run.status === 'off';
-      $('autopilot-start').disabled = !(autopilotData.presets || []).length;
-      const quickDisabled = run.status === 'running';
-      $('preset').disabled = quickDisabled;
-      $('opening-time').disabled = quickDisabled;
-      $('save-opening-time').disabled = quickDisabled;
-      if (run.status === 'running') {
-        const detail = run.currentWindow
-          ? 'Open now until ' + formatWindowTime(run.currentWindow.end) + '.'
-          : run.nextWindow ? 'Next opening at ' + formatWindowTime(run.nextWindow.start) + '.' : 'Today’s schedule is complete.';
-        $('autopilot-summary').textContent = run.presetName + ' — ' + detail;
-      } else if (run.status === 'paused') {
-        $('autopilot-summary').textContent = run.presetName + ' is paused. Manual controls are active.';
-      } else if (run.status === 'finished') {
-        $('autopilot-summary').textContent = run.presetName + ' has finished for today.';
-      } else {
-        $('autopilot-summary').textContent = (autopilotData.presets || []).length ? 'Choose a preset and turn on Autopilot for today.' : 'Create a preset to get started.';
-      }
-      const selected = (autopilotData.presets || []).find((preset) => String(preset.id) === select.value) || null;
-      editAutopilotPreset(selected);
-    }
-
-    async function loadAutopilot() {
-      try {
-        renderAutopilot(await api('/library/manage?api=autopilot'));
-      } catch (error) {
-        $('autopilot-summary').textContent = error instanceof Error ? error.message : 'Could not load Autopilot.';
-      }
-    }
-
     function render(state) {
-      const count = Number(state.currentCount || 0);
-      const cap = Number(state.capacity || 0);
-      const available = Math.max(0, cap - count);
-      const scheduledTime = state.scheduledOpen ? state.scheduledOpen.timeValue : '';
-      const progress = cap > 0 ? Math.min(100, Math.max(0, (count / cap) * 100)) : 0;
-      latestState = state;
-      latestStudentCount = Array.isArray(state.students) ? state.students.length : count;
+      const count = Number(state.currentCount || state.inLibraryCount || 0);
+      const students = Array.isArray(state.students) ? state.students : [];
+      latestStudentCount = students.length || count;
       $('clear-all').disabled = latestStudentCount < 1;
 
-      $('current').textContent = count + ' / ' + cap;
-      $('capacity-meter-fill').style.width = progress + '%';
-      $('capacity-meter-fill').dataset.empty = progress <= 0 ? 'true' : 'false';
-      $('capacity-hint').textContent = available === 1 ? '1 spot available' : available + ' spots available';
-      $('status').textContent = state.statusLabel;
-      $('status-dot').dataset.status = state.status;
-      $('mode').textContent = state.autopilot && state.autopilot.status === 'running'
-        ? 'Autopilot'
-        : state.autopilot && state.autopilot.status === 'paused' ? 'Autopilot paused' : state.statusMode === 'manual' ? 'Manual override' : 'Automatic';
-      $('status-hint').textContent = state.autopilot && state.autopilot.status === 'running'
-        ? 'Autopilot controls today’s status'
-        : state.statusMode === 'manual' ? 'Manual override' : 'Automatic status control';
-      $('scheduled-summary').textContent = formatScheduled(state.scheduledOpen);
-      $('schedule-hint').textContent = state.scheduledOpen ? 'TV countdown active' : 'No time set';
+      $('current').textContent = count === 1 ? '1 student' : count + ' students';
 
-      $('capacity').value = state.capacity;
-      setChecked('status-mode', state.statusMode);
-      setChecked('manual-status', state.manualStatus);
-      $('message').value = state.customMessage || '';
-      updateManualStatusAvailability(state.statusMode);
-      $('opening-time').value = scheduledTime;
-      $('save-opening-time').checked = false;
-      renderPresets(state.openingTimePresets || [], scheduledTime);
+      $('student-count-label').textContent = students.length === 1 ? '1 student checked in' : students.length + ' students checked in';
 
-      $('student-count-label').textContent = state.students.length === 1 ? '1 student checked in' : state.students.length + ' students checked in';
-
-      if (!state.students.length) {
+      if (!students.length) {
         $('students').innerHTML = '<div class="empty"><div><strong>No students checked in</strong><span>Students will appear here as they scan in.</span></div></div>';
         return;
       }
 
-      $('students').innerHTML = state.students.map((item) => {
+      $('students').innerHTML = students.map((item) => {
         const checkedIn = new Date(item.checkedInAt);
         const time = Number.isNaN(checkedIn.getTime()) ? 'Unknown' : timeFormatter.format(checkedIn);
         return '<div class="student-row">' +
@@ -5319,6 +4652,33 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       }
     }
 
+    async function loadSheetStatus() {
+      try {
+        const data = await api('/library/manage?api=sheet-status');
+        const pending = Number(data.pending || 0);
+        const exhausted = Number(data.exhausted || 0);
+        const queued = pending + exhausted;
+
+        if (!data.configured) {
+          $('sheets-status').textContent = 'Not configured';
+          $('sheets-helper').textContent = 'Add the Apps Script URL and shared secret to the Worker to enable the archive.';
+          return;
+        }
+
+        $('sheets-status').textContent = queued ? queued + ' waiting' : 'Up to date';
+        if (exhausted) {
+          $('sheets-helper').textContent = exhausted + ' event' + (exhausted === 1 ? '' : 's') + ' reached the retry limit. Check the receiver configuration and sync again.';
+        } else if (data.lastError) {
+          $('sheets-helper').textContent = 'Some events are waiting. Last error: ' + data.lastError;
+        } else {
+          $('sheets-helper').textContent = 'Check-in and checkout events are queued in D1 and delivered automatically.';
+        }
+      } catch (error) {
+        $('sheets-status').textContent = 'Unavailable';
+        $('sheets-helper').textContent = 'Could not load Google Sheets sync status.';
+      }
+    }
+
     function refresh(options = {}) {
       const manual = options.manual === true;
       const now = Date.now();
@@ -5334,7 +4694,8 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       refreshPromise = (async () => {
         try {
           render(await api('/library/manage?api=current'));
-          if (manual) await Promise.all([loadKioskDevices(), loadAutopilot()]);
+          await loadSheetStatus();
+          if (manual) await loadKioskDevices();
           if (manual) setNotice('Dashboard refreshed.', 'success');
         } catch (error) {
           setNotice(error instanceof Error ? error.message : 'Could not refresh.', 'error');
@@ -5408,128 +4769,21 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       }
     });
 
-    $('autopilot-preset').addEventListener('change', () => {
-      const preset = (autopilotData.presets || []).find((item) => String(item.id) === $('autopilot-preset').value) || null;
-      editAutopilotPreset(preset);
-    });
-
-    $('autopilot-add-window').addEventListener('click', () => addAutopilotWindow());
-    $('autopilot-windows').addEventListener('click', (event) => {
-      const button = event.target.closest('button[data-remove-window]');
-      if (!button) return;
-      button.closest('.autopilot-window')?.remove();
-      if (!$('autopilot-windows').children.length) addAutopilotWindow();
-    });
-
-    $('autopilot-save').addEventListener('click', async () => {
-      const selectedId = Number($('autopilot-preset').value);
-      const windows = Array.from(document.querySelectorAll('.autopilot-window')).map((row) => ({
-        start: row.querySelector('[data-autopilot-start]').value,
-        end: row.querySelector('[data-autopilot-end]').value,
-      }));
-      setNotice('Saving Autopilot preset...');
-      try {
-        const result = await post('/library/manage?api=autopilot-preset', {
-          id: Number.isInteger(selectedId) && selectedId > 0 ? selectedId : null,
-          name: $('autopilot-name').value.trim(),
-          windows,
-        });
-        await loadAutopilot();
-        $('autopilot-preset').value = String(result.id);
-        $('autopilot-preset').dispatchEvent(new Event('change'));
-        setNotice('Autopilot preset saved.', 'success');
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : 'Could not save preset.', 'error');
-      }
-    });
-
-    $('autopilot-delete').addEventListener('click', async () => {
-      const presetId = Number($('autopilot-preset').value);
-      if (!presetId || !confirm('Delete this Autopilot preset?')) return;
-      try {
-        await post('/library/manage?api=autopilot-delete', { presetId });
-        await loadAutopilot();
-        setNotice('Autopilot preset deleted.', 'success');
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : 'Could not delete preset.', 'error');
-      }
-    });
-
-    $('autopilot-start').addEventListener('click', async () => {
-      const presetId = Number($('autopilot-preset').value);
-      if (!presetId) { setNotice('Choose an Autopilot preset.', 'error'); return; }
-      try {
-        renderAutopilot(await post('/library/manage?api=autopilot-start', { presetId }));
-        await refresh();
-        setNotice('Autopilot is running for today.', 'success');
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : 'Could not start Autopilot.', 'error');
-      }
-    });
-
-    async function changeAutopilot(action) {
-      try {
-        renderAutopilot(await post('/library/manage?api=autopilot-state', { action }));
-        await refresh();
-        setNotice(action === 'resume' ? 'Autopilot resumed.' : action === 'pause' ? 'Autopilot paused.' : 'Autopilot turned off.', 'success');
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : 'Could not update Autopilot.', 'error');
-      }
-    }
-    $('autopilot-pause').addEventListener('click', () => changeAutopilot('pause'));
-    $('autopilot-resume').addEventListener('click', () => changeAutopilot('resume'));
-    $('autopilot-stop').addEventListener('click', () => changeAutopilot('stop'));
-
-    $('preset').addEventListener('change', () => {
-      if ($('preset').value) $('opening-time').value = $('preset').value;
-    });
-
-    document.querySelectorAll('input[name="status-mode"]').forEach((input) => {
-      input.addEventListener('change', () => updateManualStatusAvailability(checkedValue('status-mode')));
-    });
-
-    $('reset').addEventListener('click', () => {
-      if (latestState) {
-        render(latestState);
-        setNotice('Unsaved changes reset.');
-      } else {
-        refresh();
-      }
-    });
-
-    $('save').addEventListener('click', async () => {
-      setNotice('Saving...');
-      try {
-        const data = await post('/library/manage?api=settings', {
-          capacity: Number($('capacity').value),
-          statusMode: checkedValue('status-mode'),
-          manualStatus: checkedValue('manual-status'),
-          showPublicCount: true,
-          autoCapacityEnabled: true,
-          customMessage: $('message').value,
-          scheduledOpenTime: $('opening-time').value || null,
-          saveOpeningTime: $('save-opening-time').checked,
-        });
-        render(data.state);
-        await loadAutopilot();
-        setNotice('Saved. TV updated.', 'success');
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : 'Could not save settings.', 'error');
-      }
-    });
-
     $('sync').addEventListener('click', async () => {
+      $('sync').disabled = true;
       setNotice('Syncing...');
       try {
         const data = await post('/library/manage?api=sync-sheets', {});
-        setNotice('Sheets sync: ' + data.synced + ' synced, ' + data.failed + ' failed.', 'success');
+        setNotice('Sheets sync: ' + data.synced + ' synced, ' + data.failed + ' failed.', data.failed ? 'error' : 'success');
+        await loadSheetStatus();
       } catch (error) {
         setNotice(error instanceof Error ? error.message : 'Could not sync.', 'error');
+      } finally {
+        $('sync').disabled = false;
       }
     });
 
     refresh();
-    loadAutopilot();
     loadKioskDevices();
     setInterval(() => { if (!document.hidden) refresh(); }, 15000);
     document.addEventListener('visibilitychange', () => {
