@@ -57,8 +57,8 @@ async function handleStats(request: Request, env: Env): Promise<Response> {
 
   const startIso = localDateStartIso(from);
   const endIso = localDateStartIso(addDateOnly(to, 1));
-  const previousTo = addDateOnly(from, -1);
-  const previousFrom = addDateOnly(previousTo, -(days - 1));
+  const previousTo = days === 1 ? addDateOnly(from, -7) : addDateOnly(from, -1);
+  const previousFrom = days === 1 ? previousTo : addDateOnly(previousTo, -(days - 1));
   const previousStartIso = localDateStartIso(previousFrom);
   const previousEndIso = startIso;
 
@@ -115,6 +115,7 @@ async function handleStats(request: Request, env: Env): Promise<Response> {
   const gradeCounts = new Map<string, number>();
   const completedDurations: number[] = [];
   const lunchDurations: number[] = [];
+  const daypartReasons = new Map<string, Map<string, number>>();
   let lunchVisits = 0;
 
   for (const visit of visits) {
@@ -126,8 +127,13 @@ async function handleStats(request: Request, env: Env): Promise<Response> {
     increment(dayCounts, parts.date);
     increment(weekdayCounts, parts.weekday);
     increment(hourCounts, parts.hour);
-    increment(reasonCounts, visit.reason || "Other");
+    const reason = visit.reason || "Other";
+    increment(reasonCounts, reason);
     increment(gradeCounts, visit.grade || "Not set");
+    const daypart = parts.hour < 11 ? "Morning" : parts.hour < 14 ? "Midday" : "Afternoon";
+    const daypartMap = daypartReasons.get(daypart) ?? new Map<string, number>();
+    increment(daypartMap, reason);
+    daypartReasons.set(daypart, daypartMap);
 
     if ((visit.reason || "").toLowerCase() === "lunch") lunchVisits += 1;
     if (visit.checked_out_at) {
@@ -168,6 +174,8 @@ async function handleStats(request: Request, env: Env): Promise<Response> {
   const averageDuration = average(completedDurations);
   const medianDuration = median(completedDurations);
   const longestDuration = completedDurations.length ? Math.max(...completedDurations) : null;
+  const meaningfulDurations = completedDurations.filter((value) => value >= 2);
+  const shortestMeaningfulDuration = meaningfulDurations.length ? Math.min(...meaningfulDurations) : null;
   const lunchMedianDuration = median(lunchDurations);
 
   const busiestDateEntry = maxEntry(dayCounts);
@@ -180,7 +188,9 @@ async function handleStats(request: Request, env: Env): Promise<Response> {
   const rangeStartMs = new Date(startIso).getTime();
   const rangeEndMs = new Date(endIso).getTime();
   const peakOccupancy = peakConcurrent(overlaps, rangeStartMs, rangeEndMs);
-  const peakLunchOccupancy = peakConcurrent(overlaps.filter((v) => (v.reason || "").toLowerCase() === "lunch"), rangeStartMs, rangeEndMs);
+  const lunchOverlapVisits = overlaps.filter((v) => (v.reason || "").toLowerCase() === "lunch");
+  const peakLunchOccupancy = peakConcurrent(lunchOverlapVisits, rangeStartMs, rangeEndMs);
+  const typicalLunchPeak = averageDailyPeak(lunchOverlapVisits, from, to);
   const rush = busiestThirtyMinutes(visits);
 
   const traffic = buildTrafficSeries(from, to, dayCounts);
@@ -188,6 +198,10 @@ async function handleStats(request: Request, env: Env): Promise<Response> {
   const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((label) => ({ label, visits: weekdayCounts.get(label) ?? 0 }));
   const reasons = sortedBreakdown(reasonCounts);
   const grades = ["9", "10", "11", "12", "Not set"].map((label) => ({ label, visits: gradeCounts.get(label) ?? 0 })).filter((x) => x.visits > 0);
+  const reasonByDaypart = ["Morning", "Midday", "Afternoon"].map((daypart) => {
+    const top = maxEntry(daypartReasons.get(daypart) ?? new Map<string, number>());
+    return top ? { daypart, reason: top[0], visits: top[1] } : { daypart, reason: null, visits: 0 };
+  });
 
   const schoolUnique = new Set(schoolVisits.map((v) => v.student_row_id)).size;
   const milestones = buildMilestones(schoolVisits);
@@ -214,7 +228,7 @@ async function handleStats(request: Request, env: Env): Promise<Response> {
       repeatRate: percentage(repeatVisitors, uniqueStudents),
       regularCount,
       fiveDayVisitors,
-      regulars: regulars.slice(0, 10),
+      regulars: regulars.filter((row) => row.visits >= 5).slice(0, 10),
     },
     patterns: {
       busiestDate: busiestDateEntry ? { date: busiestDateEntry[0], visits: busiestDateEntry[1] } : null,
@@ -225,10 +239,13 @@ async function handleStats(request: Request, env: Env): Promise<Response> {
       quietestActiveHour: quietestHourEntry ? { hour: quietestHourEntry[0], visits: quietestHourEntry[1] } : null,
       rushHour: rush,
       longestCompletedVisitMinutes: longestDuration,
+      shortestMeaningfulVisitMinutes: shortestMeaningfulDuration,
+      reasonByDaypart,
     },
     lunch: {
       visits: lunchVisits,
       peakOccupancy: peakLunchOccupancy,
+      typicalPeakOccupancy: typicalLunchPeak,
       medianDurationMinutes: lunchMedianDuration,
     },
     traffic,
@@ -303,6 +320,25 @@ function peakConcurrent(visits: StatVisitRow[], rangeStart: number, rangeEnd: nu
     if (current > peak) peak = current;
   }
   return peak;
+}
+
+function averageDailyPeak(visits: StatVisitRow[], from: string, to: string): number | null {
+  const byDate = new Map<string, StatVisitRow[]>();
+  for (const visit of visits) {
+    const date = zonedParts(visit.checked_in_at).date;
+    if (date < from || date > to) continue;
+    const rows = byDate.get(date) ?? [];
+    rows.push(visit);
+    byDate.set(date, rows);
+  }
+  const peaks: number[] = [];
+  for (const [date, rows] of byDate) {
+    const start = new Date(localDateStartIso(date)).getTime();
+    const end = new Date(localDateStartIso(addDateOnly(date, 1))).getTime();
+    peaks.push(peakConcurrent(rows, start, end));
+  }
+  const value = average(peaks);
+  return value === null ? null : round1(value);
 }
 
 function busiestThirtyMinutes(visits: StatVisitRow[]) {
