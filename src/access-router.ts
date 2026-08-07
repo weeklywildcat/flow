@@ -1,4 +1,4 @@
-import adminApp from "./admin-v3";
+import adminApp from "./admin-v4";
 
 const MANAGE_PATH = "/library/manage";
 const MANAGE_API_PATTERN = /^[a-z0-9-]+$/;
@@ -29,10 +29,6 @@ export default {
           if (key !== "api") target.searchParams.append(key, value);
         }
 
-        // Keep the original Cloudflare Access headers while routing the request
-        // internally to the API handler. This allows Access to protect only the
-        // librarian-facing /library/manage path instead of exposing a second
-        // browser-facing authentication surface under /api/library/*.
         const rewrittenRequest = new Request(target.toString(), request);
         return adminApp.fetch(rewrittenRequest, env, ctx);
       }
