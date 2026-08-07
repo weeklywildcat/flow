@@ -42,6 +42,12 @@ type HistoryRow = {
   duration_minutes: number | null;
 };
 
+type KioskAttentionRow = {
+  id: number;
+  name: string;
+  last_seen_at: string | null;
+};
+
 export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
@@ -64,6 +70,9 @@ export default {
           if (request.method === "GET") return handleStudents(request, env);
           if (request.method === "POST") return handleSaveStudent(request, env);
           return methodNotAllowed(["GET", "POST"]);
+        }
+        if (pathname === "/api/library/admin-student") {
+          return request.method === "GET" ? handleStudentDetail(request, env) : methodNotAllowed(["GET"]);
         }
         if (pathname === "/api/library/admin-history") {
           return request.method === "GET" ? handleHistory(request, env) : methodNotAllowed(["GET"]);
@@ -88,17 +97,26 @@ async function handleOverview(env: Env): Promise<Response> {
   const start = localDateStartIso(today);
   const end = localDateStartIso(addDateOnly(today, 1));
   const onlineCutoff = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
+  const longVisitCutoff = new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString();
 
-  const [current, todayVisits, uniqueToday, students, kiosks, onlineKiosks, recent] = await Promise.all([
+  const [current, todayVisits, uniqueToday, students, kiosks, onlineKiosks, recent, longVisits, staleKiosks] = await Promise.all([
     env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_visits WHERE checked_out_at IS NULL").first<{ count: number }>(),
     env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ?").bind(start, end).first<{ count: number }>(),
     env.SIGNAGE_DB.prepare("SELECT COUNT(DISTINCT student_row_id) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ?").bind(start, end).first<{ count: number }>(),
     env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_students WHERE active = 1").first<{ count: number }>(),
     env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_kiosk_devices WHERE revoked_at IS NULL").first<{ count: number }>(),
     env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_kiosk_devices WHERE revoked_at IS NULL AND last_seen_at >= ?").bind(onlineCutoff).first<{ count: number }>(),
+    env.SIGNAGE_DB.prepare(`${historySelectSql()} ORDER BY v.checked_in_at DESC LIMIT 10`).all<HistoryRow>(),
     env.SIGNAGE_DB.prepare(
-      `${historySelectSql()} ORDER BY v.checked_in_at DESC LIMIT 8`
-    ).all<HistoryRow>(),
+      `${historySelectSql()} WHERE v.checked_out_at IS NULL AND v.checked_in_at < ? ORDER BY v.checked_in_at ASC LIMIT 5`
+    ).bind(longVisitCutoff).all<HistoryRow>(),
+    env.SIGNAGE_DB.prepare(
+      `SELECT id, name, last_seen_at
+       FROM library_kiosk_devices
+       WHERE revoked_at IS NULL AND (last_seen_at IS NULL OR last_seen_at < ?)
+       ORDER BY CASE WHEN last_seen_at IS NULL THEN 0 ELSE 1 END, last_seen_at ASC
+       LIMIT 5`
+    ).bind(onlineCutoff).all<KioskAttentionRow>(),
   ]);
 
   return json({
@@ -110,6 +128,14 @@ async function handleOverview(env: Env): Promise<Response> {
     pairedKiosks: kiosks?.count ?? 0,
     onlineKiosks: onlineKiosks?.count ?? 0,
     recent: recent.results.map(publicHistoryRow),
+    attention: {
+      longVisits: longVisits.results.map(publicHistoryRow),
+      staleKiosks: staleKiosks.results.map((row) => ({
+        id: row.id,
+        name: row.name,
+        lastSeenAt: row.last_seen_at,
+      })),
+    },
   });
 }
 
@@ -158,19 +184,51 @@ async function handleStudents(request: Request, env: Env): Promise<Response> {
     total: countRow?.count ?? 0,
     limit,
     offset,
-    students: rows.results.map((row) => ({
-      id: row.id,
-      studentId: row.student_id,
-      barcode: row.barcode,
-      firstName: row.first_name,
-      lastName: row.last_name,
-      grade: row.grade,
-      active: row.active === 1,
-      updatedAt: row.updated_at,
-      visitCount: row.visit_count ?? 0,
-      lastVisitAt: row.last_visit_at,
-    })),
+    students: rows.results.map(publicAdminStudent),
   });
+}
+
+async function handleStudentDetail(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const id = clampInt(url.searchParams.get("id"), 1, 1000000000, 0);
+  if (!id) return json({ error: "Student ID is required." }, 400);
+
+  const student = await env.SIGNAGE_DB.prepare(
+    `SELECT
+       s.id, s.student_id, s.barcode, s.first_name, s.last_name, s.grade, s.active, s.updated_at,
+       COUNT(v.id) AS visit_count,
+       MAX(v.checked_in_at) AS last_visit_at
+     FROM library_students s
+     LEFT JOIN library_visits v ON v.student_row_id = s.id
+     WHERE s.id = ?
+     GROUP BY s.id`
+  ).bind(id).first<AdminStudentRow>();
+
+  if (!student) return json({ error: "Student was not found." }, 404);
+
+  const recent = await env.SIGNAGE_DB.prepare(
+    `${historySelectSql()} WHERE v.student_row_id = ? ORDER BY v.checked_in_at DESC LIMIT 8`
+  ).bind(id).all<HistoryRow>();
+
+  return json({
+    student: publicAdminStudent(student),
+    recentVisits: recent.results.map(publicHistoryRow),
+  });
+}
+
+function publicAdminStudent(row: AdminStudentRow) {
+  return {
+    id: row.id,
+    studentId: row.student_id,
+    barcode: row.barcode,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    grade: row.grade,
+    active: row.active === 1,
+    updatedAt: row.updated_at,
+    visitCount: row.visit_count ?? 0,
+    lastVisitAt: row.last_visit_at,
+  };
 }
 
 async function handleSaveStudent(request: Request, env: Env): Promise<Response> {
