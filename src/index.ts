@@ -1,1 +1,1 @@
-export { default } from "./library";
+export { default } from "./admin";
