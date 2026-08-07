@@ -1,4 +1,4 @@
-import adminApp from "./admin-v2";
+import adminApp from "./admin-v3";
 
 const MANAGE_PATH = "/library/manage";
 const MANAGE_API_PATTERN = /^[a-z0-9-]+$/;
