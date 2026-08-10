@@ -1215,8 +1215,8 @@ function kioskHtml(): string {
       --amber: #735600;
       --amber-soft: #fff6dc;
       --focus: #174ea6;
-      --font-ui: "Google Sans", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
-      --font-display: "Google Sans", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
+      --font-ui: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      --font-display: "Helvetica Neue", Helvetica, Arial, sans-serif;
     }
 
     * { box-sizing: border-box; }
@@ -1980,7 +1980,7 @@ function kioskHtml(): string {
       .student-form select { min-height: 48px; font-size: 19px; }
     }
 
-    /* Shared Apple-inspired design language; motion behavior stays unchanged. */
+    /* Kiosk visual refinements; motion behavior stays unchanged. */
     :root {
       --bg: #f5f5f7;
       --surface: rgba(255, 255, 255, .9);
@@ -1996,8 +1996,8 @@ function kioskHtml(): string {
       --amber: #a05a00;
       --amber-soft: #fff7e8;
       --focus: #007aff;
-      --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
-      --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+      --font-ui: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      --font-display: "Helvetica Neue", Helvetica, Arial, sans-serif;
     }
 
     body {
@@ -2014,10 +2014,10 @@ function kioskHtml(): string {
       backdrop-filter: blur(22px) saturate(160%);
     }
 
-    .brand { font-weight: 700; letter-spacing: -.025em; }
-    .eyebrow { color: var(--blue, #007aff); font-weight: 700; letter-spacing: .06em; }
-    h1 { font-weight: 760; letter-spacing: -.045em; }
-    .lead { color: var(--muted); font-weight: 520; letter-spacing: -.015em; }
+    .brand { font-weight: 600; letter-spacing: -.015em; }
+    .eyebrow { color: var(--blue, #007aff); font-weight: 600; letter-spacing: .075em; }
+    h1 { font-weight: 700; letter-spacing: -.03em; }
+    .lead { color: var(--muted); font-weight: 400; letter-spacing: 0; line-height: 1.2; }
 
     .scan-status {
       border-color: rgba(0, 0, 0, .08);
@@ -2034,8 +2034,23 @@ function kioskHtml(): string {
       color: #007aff;
     }
 
-    .status-title { font-weight: 720; letter-spacing: -.025em; }
-    .status-detail { color: var(--muted); }
+    .status-title { font-weight: 600; letter-spacing: -.015em; }
+    .status-detail { color: var(--muted); font-weight: 400; }
+
+    .pairing-form label,
+    .student-form label { font-weight: 600; letter-spacing: .06em; }
+
+    .pairing-form input,
+    .student-form input,
+    .student-form select { font-weight: 600; letter-spacing: 0; }
+
+    .pairing-form button,
+    .student-form button[type="submit"] { font-weight: 700; letter-spacing: 0; }
+
+    .reason span { font-weight: 600; letter-spacing: -.01em; }
+    .cancel { font-weight: 600; letter-spacing: 0; }
+    .footer { font-weight: 400; }
+    .footer-status { font-weight: 700; letter-spacing: .06em; }
 
     .reason {
       border-color: rgba(0, 0, 0, .09);
@@ -2067,6 +2082,10 @@ function kioskHtml(): string {
       background: rgba(255, 255, 255, .86);
       box-shadow: 0 20px 60px rgba(0, 0, 0, .08);
       backdrop-filter: blur(22px) saturate(155%);
+    }
+
+    .student-form {
+      padding: clamp(14px, 2.4vw, 24px);
     }
 
     .pairing-form {
