@@ -4192,7 +4192,7 @@ function kioskHtml(): string {
 
     pairingForm.addEventListener('submit', async (event) => {
       event.preventDefault();
-      const pin = pairingPin.value.replace(/\D/g, '').slice(0, 8);
+      const pin = pairingPin.value.replace(/\\D/g, '').slice(0, 8);
       if (pin.length !== 8 || busy) return;
       busy = true;
       pairingError.textContent = '';
@@ -6492,7 +6492,7 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
         to = $('export-to').value;
       }
 
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(from) || !/^\\d{4}-\\d{2}-\\d{2}$/.test(to)) {
         throw new Error('Choose a start and end date.');
       }
       if (from > to) throw new Error('The start date must be on or before the end date.');
