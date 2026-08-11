@@ -448,6 +448,7 @@ function normalizePath(pathname: string): string {
 }
 
 function clampInt(value: string | null, min: number, max: number, fallback: number): number {
+  if (value === null || value.trim() === "") return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(parsed)));
