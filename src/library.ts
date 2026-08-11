@@ -1486,6 +1486,41 @@ function kioskHtml(): string {
       overflow: visible;
     }
 
+    /* The hint flashes first so the light looks like it left the physical scanner. */
+    .barcode-scanner-hint::before {
+      content: "";
+      position: absolute;
+      right: -14px;
+      top: 50%;
+      width: 78px;
+      height: 78px;
+      margin-top: -39px;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(255, 255, 255, .8) 0 12%, rgba(0, 122, 255, .42) 34%, rgba(0, 122, 255, .1) 58%, transparent 72%);
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    body[data-scan-launch="true"] .barcode-scanner-hint::before {
+      animation: hintFlash 280ms ease-out both;
+    }
+
+    body[data-scan-launch="true"] .barcode-scanner-hint {
+      animation: hintKick 300ms var(--motion-ease) both;
+    }
+
+    @keyframes hintFlash {
+      0% { opacity: 0; transform: scale(.5); }
+      22% { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(1.35); }
+    }
+
+    @keyframes hintKick {
+      0% { transform: translate(0, 0); }
+      26% { transform: translate(2px, 2px); }
+      100% { transform: translate(0, 0); }
+    }
+
     .screen {
       width: min(920px, 100%);
       max-height: 100%;
@@ -1597,14 +1632,13 @@ function kioskHtml(): string {
       animation: idleIconBreath 3.8s ease-in-out infinite;
     }
 
-    body[data-scan-flash="true"] .scan-status {
-      border-color: rgba(116, 31, 39, 0.42);
-      box-shadow: 0 20px 58px rgba(116, 31, 39, 0.16);
+    /* Extra attribute selectors keep these ahead of the idle breathing animations above.
+       Colour for this state lives with the rest of the blue palette further down. */
+    body[data-scan-flash="true"][data-step][data-tone] .scan-status {
       animation: scanCapture 280ms ease-out both;
     }
 
-    body[data-scan-flash="true"] .scan-symbol {
-      background: rgba(116, 31, 39, 0.08);
+    body[data-scan-flash="true"][data-step][data-tone] .scan-symbol {
       animation: scanIconCapture 300ms ease-out both;
     }
 
@@ -1621,16 +1655,16 @@ function kioskHtml(): string {
     body[data-step="reasons"] .reason {
       position: relative;
       overflow: hidden;
-      animation: reasonIn 280ms cubic-bezier(.2, .85, .25, 1) both;
-      transition: transform 120ms ease, background 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
+      animation: reasonIn 300ms cubic-bezier(.2, .85, .25, 1) both;
+      transition: transform 260ms var(--motion-ease), filter 260ms var(--motion-smooth), background 140ms ease, border-color 140ms ease, color 140ms ease, opacity 260ms var(--motion-smooth), box-shadow 140ms ease;
     }
 
     body[data-step="reasons"] .reason:nth-child(1) { animation-delay: 0ms; }
-    body[data-step="reasons"] .reason:nth-child(2) { animation-delay: 38ms; }
-    body[data-step="reasons"] .reason:nth-child(3) { animation-delay: 76ms; }
-    body[data-step="reasons"] .reason:nth-child(4) { animation-delay: 114ms; }
-    body[data-step="reasons"] .reason:nth-child(5) { animation-delay: 152ms; }
-    body[data-step="reasons"] .reason:nth-child(6) { animation-delay: 190ms; }
+    body[data-step="reasons"] .reason:nth-child(2) { animation-delay: 30ms; }
+    body[data-step="reasons"] .reason:nth-child(3) { animation-delay: 60ms; }
+    body[data-step="reasons"] .reason:nth-child(4) { animation-delay: 90ms; }
+    body[data-step="reasons"] .reason:nth-child(5) { animation-delay: 120ms; }
+    body[data-step="reasons"] .reason:nth-child(6) { animation-delay: 150ms; }
 
     .reason.selected {
       background: var(--green-soft);
@@ -1657,9 +1691,108 @@ function kioskHtml(): string {
       animation: selectedCheck 180ms ease-out both;
     }
 
-    .reason-grid[data-selecting="true"] .reason:not(.selected) {
-      opacity: .48;
-      transform: scale(.985);
+    /* The chosen reason springs; everything else dissolves into the wave it sets off.
+       These have to outrank the filled reasonIn/funFactIn entrances above. */
+    body[data-step="reasons"] .reason-grid[data-selecting="true"] .reason:not(.selected) {
+      animation: reasonDissolve 260ms var(--motion-smooth) both;
+    }
+
+    body[data-step="reasons"] .reason-grid[data-selecting="true"] .reason.selected {
+      animation: reasonPress 340ms cubic-bezier(.2, .9, .24, 1.16) both;
+    }
+
+    body[data-step="reasons"][data-choosing="true"] .library-fun-fact {
+      animation: funFactOut 240ms var(--motion-smooth) both;
+    }
+
+    @keyframes reasonDissolve {
+      from { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); }
+      to { opacity: 0; transform: scale(.96) translateY(3px); filter: blur(6px); }
+    }
+
+    @keyframes reasonPress {
+      0% { transform: scale(1); }
+      26% { transform: scale(.952); }
+      100% { transform: scale(1.014); }
+    }
+
+    @keyframes funFactOut {
+      from { opacity: 1; transform: translateY(0); filter: blur(0); }
+      to { opacity: 0; transform: translateY(3px); filter: blur(6px); }
+    }
+
+    /* Recognition: the barcode icon collapses into a single glowing dot before the choices land. */
+    body[data-morph="dot"][data-step][data-tone] .scan-symbol {
+      animation: symbolToDot 210ms var(--motion-ease) both;
+    }
+
+    body[data-morph="dot"][data-step][data-tone] .scan-symbol svg {
+      animation: symbolIconDissolve 150ms ease-out both;
+    }
+
+    body[data-morph="dot"][data-step][data-tone] .scan-symbol::after {
+      animation: none;
+      opacity: 0;
+    }
+
+    body[data-morph="dot"][data-step][data-tone] .scan-status {
+      animation: statusSettle 210ms var(--motion-ease) both;
+    }
+
+    .screen-content.is-leaving .eyebrow,
+    .screen-content.is-leaving h1,
+    .screen-content.is-leaving .lead,
+    .screen-content.is-leaving .status-title,
+    .screen-content.is-leaving .status-detail {
+      animation: copyPull 190ms var(--motion-smooth) both;
+    }
+
+    @keyframes symbolToDot {
+      0% { border-radius: 18px; border-color: rgba(0, 122, 255, .14); background-color: rgba(0, 122, 255, .08); transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 122, 255, 0); }
+      55% { border-radius: 999px; border-color: transparent; background-color: rgba(0, 122, 255, .92); transform: scale(.44); box-shadow: 0 0 24px 5px rgba(0, 122, 255, .45); }
+      100% { border-radius: 999px; border-color: transparent; background-color: rgba(0, 122, 255, .78); transform: scale(.3); box-shadow: 0 0 38px 11px rgba(0, 122, 255, .26); }
+    }
+
+    @keyframes symbolIconDissolve {
+      from { opacity: 1; transform: scale(1); }
+      to { opacity: 0; transform: scale(.6); }
+    }
+
+    @keyframes statusSettle {
+      from { transform: scale(1); }
+      to { transform: scale(.988); }
+    }
+
+    @keyframes copyPull {
+      from { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+      to { opacity: 0; transform: translateY(4px) scale(.985); filter: blur(4px); }
+    }
+
+    /* Every ten seconds or so the idle card sends out one faint radar ping. */
+    body[data-step="idle"][data-tone="idle"] .scan-status::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      border: 1.5px solid rgba(0, 122, 255, .34);
+      opacity: 0;
+      pointer-events: none;
+      animation: radarPing 9.5s cubic-bezier(.2, .74, .3, 1) infinite;
+    }
+
+    @keyframes radarPing {
+      0% { opacity: 0; transform: scale(1); }
+      2% { opacity: .5; }
+      13% { opacity: 0; transform: scale(1.13); }
+      100% { opacity: 0; transform: scale(1.13); }
+    }
+
+    /* A real scan outranks the idle ping. */
+    body[data-scan-launch="true"][data-step][data-tone] .scan-status::after,
+    body[data-scan-flash="true"][data-step][data-tone] .scan-status::after,
+    body[data-morph="dot"][data-step][data-tone] .scan-status::after {
+      animation: none;
+      opacity: 0;
     }
 
     body[data-step="new-student"] .student-form {
@@ -1716,12 +1849,38 @@ function kioskHtml(): string {
       animation: successText 260ms ease-out 150ms both;
     }
 
+    /* Checking in is an arrival; checking out is a departure, so it leans blue and moves away. */
     body[data-success-type="checkout"] .scan-status {
       animation: checkoutPop 420ms cubic-bezier(.2, .86, .18, 1.16) both;
     }
 
     body[data-success-type="checkout"] .scan-symbol {
-      animation: checkoutLift 520ms ease-out both;
+      animation: checkoutLift 560ms cubic-bezier(.22, 1, .36, 1) both;
+    }
+
+    body[data-success-type="checkout"] .scan-symbol svg {
+      animation: checkoutMarkDrift 560ms cubic-bezier(.22, 1, .36, 1) 60ms both;
+    }
+
+    body[data-success-type="checkout"][data-tone="success"] {
+      background-color: #f1effc;
+    }
+
+    body[data-success-type="checkout"][data-tone="success"] .scan-symbol {
+      color: #5e5ce6;
+    }
+
+    body[data-success-type="checkout"][data-tone="success"] h1 {
+      color: #4b47cf;
+    }
+
+    body[data-success-type="checkout"][data-tone="success"] .eyebrow {
+      color: #5e5ce6;
+    }
+
+    body[data-success-type="checkout"][data-tone="success"] .scan-status {
+      border-color: rgba(94, 92, 230, .2);
+      box-shadow: 0 22px 64px rgba(94, 92, 230, .16);
     }
 
     @keyframes idleBreath {
@@ -1736,7 +1895,7 @@ function kioskHtml(): string {
 
     @keyframes scanCapture {
       0% { transform: scale(1); }
-      45% { transform: scale(.985); }
+      40% { transform: scale(.98); }
       100% { transform: scale(1); }
     }
 
@@ -1753,8 +1912,9 @@ function kioskHtml(): string {
     }
 
     @keyframes reasonIn {
-      from { opacity: 0; transform: translateY(9px) scale(.985); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
+      0% { opacity: 0; transform: translateY(10px) scale(.96); filter: blur(5px); }
+      55% { opacity: 1; filter: blur(1px); }
+      100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
     }
 
     @keyframes selectedCheck {
@@ -1779,9 +1939,15 @@ function kioskHtml(): string {
     }
 
     @keyframes checkoutLift {
-      0% { transform: translateY(4px) scale(.86); }
-      60% { transform: translateY(-2px) scale(1.07); }
-      100% { transform: translateY(0) scale(1); }
+      0% { transform: translate(0, 4px) scale(.86); }
+      55% { transform: translate(1px, -5px) scale(1.06); }
+      100% { transform: translate(3px, -3px) scale(1); }
+    }
+
+    @keyframes checkoutMarkDrift {
+      0% { opacity: 0; transform: translateX(-5px) scale(.8); }
+      45% { opacity: 1; transform: translateX(1px) scale(1.02); }
+      100% { opacity: 1; transform: translateX(2px) scale(1); }
     }
 
     .eyebrow {
@@ -1861,6 +2027,12 @@ function kioskHtml(): string {
       stroke-width: 2.2;
     }
 
+    /* One symbol slot, two glyphs: the barcode while scanning, the check once it lands. */
+    .scan-symbol .symbol-check { display: none; }
+
+    body[data-step="success"] .scan-symbol .symbol-barcode { display: none; }
+    body[data-step="success"] .scan-symbol .symbol-check { display: block; }
+
     body[data-step="idle"][data-tone="idle"] .scan-symbol::after {
       content: "";
       position: absolute;
@@ -1916,7 +2088,7 @@ function kioskHtml(): string {
 
     body[data-step="reasons"] .library-fun-fact {
       display: flex;
-      animation: funFactIn 440ms var(--motion-ease) 220ms both;
+      animation: funFactIn 380ms var(--motion-ease) 285ms both;
     }
 
     .fun-fact-icon {
@@ -2389,79 +2561,142 @@ function kioskHtml(): string {
     }
 
 
-    .scan-sweep {
+    /* The physical scanner sits at the bottom-right, so scan reactions travel in from that corner. */
+    .fx-layer {
       position: fixed;
       inset: 0;
-      z-index: 4;
-      pointer-events: none;
       overflow: hidden;
+      pointer-events: none;
+    }
+
+    .fx-back { z-index: 0; }
+    .fx-front { z-index: 4; }
+
+    .fx-front::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, transparent 44%, rgba(0, 122, 255, .18) 50%, rgba(255, 255, 255, .3) 52.5%, transparent 60%);
+      clip-path: circle(0% at 100% 100%);
+      mix-blend-mode: screen;
       opacity: 0;
     }
 
-    .scan-sweep::before {
-      content: "";
+    .fx-front.is-active::before {
+      animation: scanCornerWash 300ms cubic-bezier(.2, .74, .3, 1) both;
+    }
+
+    @keyframes scanCornerWash {
+      0% { clip-path: circle(0% at 100% 100%); opacity: 0; }
+      20% { opacity: 1; }
+      100% { clip-path: circle(118% at 100% 100%); opacity: 0; }
+    }
+
+    .scan-streak {
       position: absolute;
-      inset: 0;
-      background:
-        radial-gradient(circle at 100% 100%, rgba(255, 255, 255, .92) 0 1.4%, transparent 9%),
-        linear-gradient(135deg, transparent 42%, rgba(0, 122, 255, .26) 49%, transparent 56%);
-      clip-path: circle(0% at 100% 100%);
-      mix-blend-mode: screen;
+      left: 0;
+      top: 0;
+      width: 88px;
+      height: 7px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(0, 122, 255, 0) 0%, rgba(0, 122, 255, .34) 46%, rgba(130, 200, 255, .9) 82%, #fff 97%);
+      filter: drop-shadow(0 0 9px rgba(0, 122, 255, .6));
+      will-change: transform, opacity;
     }
 
-    .scan-sweep::after {
-      content: "";
+    .scan-streak.is-departing {
+      background: linear-gradient(90deg, rgba(175, 82, 222, 0) 0%, rgba(175, 82, 222, .32) 46%, rgba(190, 160, 255, .82) 82%, #fff 97%);
+      filter: drop-shadow(0 0 9px rgba(140, 110, 255, .55));
+    }
+
+    .scan-ripple {
       position: absolute;
-      right: clamp(18px, 2vw, 40px);
-      bottom: clamp(18px, 2vw, 40px);
-      width: clamp(72px, 10vw, 180px);
-      aspect-ratio: 1;
-      border: clamp(3px, .35vw, 7px) solid #007aff;
-      border-radius: 50%;
-      box-shadow: 0 0 0 10px rgba(0, 122, 255, .16), 0 0 44px rgba(0, 122, 255, .58);
-      transform: scale(.18);
-      transform-origin: center;
+      left: 0;
+      top: 0;
+      width: 96px;
+      height: 96px;
+      border-radius: 999px;
+      border: 2px solid rgba(0, 122, 255, .5);
+      box-shadow: 0 0 0 7px rgba(0, 122, 255, .07);
+      will-change: transform, opacity;
     }
 
-    .scan-sweep.is-active {
-      animation: kioskScanSweepFade 1100ms ease-out both;
+    .fx-dot-bloom {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 130px;
+      height: 130px;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(255, 255, 255, .85) 0 14%, rgba(0, 122, 255, .42) 34%, rgba(0, 122, 255, .12) 58%, transparent 72%);
+      will-change: transform, opacity;
     }
 
-    .scan-sweep.is-active::before {
-      animation: kioskScanSweepExpand 950ms cubic-bezier(.16, .82, .24, 1) both;
+    .choice-wave {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 140px;
+      height: 140px;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(48, 209, 88, .34) 0 52%, rgba(36, 138, 61, .18) 72%, rgba(36, 138, 61, .04) 86%, transparent 92%);
+      will-change: transform, opacity;
     }
 
-    .scan-sweep.is-active::after {
-      animation: kioskScanSweepRing 850ms cubic-bezier(.18, .78, .24, 1) both;
+    .aurora-bloom {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 130vmax;
+      height: 130vmax;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(48, 209, 88, .3) 0 18%, rgba(0, 122, 255, .18) 38%, rgba(0, 122, 255, .05) 58%, transparent 72%);
+      will-change: transform, opacity;
     }
 
-    @keyframes kioskScanSweepExpand {
-      0% {
-        clip-path: circle(0% at 100% 100%);
-        opacity: 0;
-      }
-      12% { opacity: 1; }
-      100% {
-        clip-path: circle(155% at 100% 100%);
-        opacity: 0;
-      }
+    .aurora-bloom.is-departure {
+      background: radial-gradient(circle, rgba(94, 92, 230, .28) 0 18%, rgba(175, 82, 222, .18) 38%, rgba(0, 122, 255, .06) 58%, transparent 72%);
     }
 
-    @keyframes kioskScanSweepRing {
-      0% {
-        opacity: 0;
-        transform: scale(.18);
-      }
-      16% { opacity: 1; }
-      100% {
-        opacity: 0;
-        transform: scale(7.5);
-      }
+    .success-ring {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 120px;
+      height: 120px;
+      border-radius: 999px;
+      border: 2px solid rgba(48, 209, 88, .42);
+      box-shadow: 0 0 0 8px rgba(48, 209, 88, .07);
+      will-change: transform, opacity;
     }
 
-    @keyframes kioskScanSweepFade {
-      0%, 82% { opacity: 1; }
-      100% { opacity: 0; }
+    .success-ring.is-departure {
+      border-color: rgba(120, 110, 240, .4);
+      box-shadow: 0 0 0 8px rgba(120, 110, 240, .07);
+    }
+
+    .burst-piece {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: currentColor;
+      will-change: transform, opacity;
+    }
+
+    .burst-piece.is-diamond {
+      width: 9px;
+      height: 9px;
+      border-radius: 2px;
+    }
+
+    .burst-piece.is-sparkle {
+      width: 15px;
+      height: 15px;
+      border-radius: 0;
+      clip-path: polygon(50% 0%, 60% 40%, 100% 50%, 60% 60%, 50% 100%, 40% 60%, 0% 50%, 40% 40%);
     }
 
     .motion-background {
@@ -2471,6 +2706,21 @@ function kioskHtml(): string {
       z-index: 0;
       overflow: hidden;
       pointer-events: none;
+    }
+
+    /* Scaled inside the clipped background so the orbs pull in without exposing a hard edge. */
+    .motion-orb-field {
+      position: absolute;
+      inset: 0;
+      transform-origin: 50% 50%;
+      transition: transform 820ms var(--motion-ease), filter 820ms var(--motion-smooth);
+    }
+
+    /* While the kiosk looks the student up, the background draws inward like it is thinking. */
+    body[data-lookup="true"] .motion-orb-field,
+    body[data-morph="dot"] .motion-orb-field {
+      transform: scale(.9);
+      filter: saturate(120%) brightness(1.02);
     }
 
     .motion-orb {
@@ -2557,6 +2807,7 @@ function kioskHtml(): string {
       box-shadow: 0 2px 4px rgba(0, 0, 0, .025), 0 18px 54px rgba(0, 0, 0, .07);
       backdrop-filter: blur(20px) saturate(155%);
       transform-origin: center;
+      position: relative;
     }
 
     .scan-symbol {
@@ -2844,10 +3095,13 @@ function kioskHtml(): string {
 <body data-step="idle" data-tone="idle">
 
   <div class="motion-background" aria-hidden="true">
-    <div class="motion-orb motion-orb-primary"></div>
-    <div class="motion-orb motion-orb-secondary"></div>
+    <div class="motion-orb-field">
+      <div class="motion-orb motion-orb-primary"></div>
+      <div class="motion-orb motion-orb-secondary"></div>
+    </div>
   </div>
-  <div class="scan-sweep" id="scan-sweep" aria-hidden="true"></div>
+  <div class="fx-layer fx-back" id="fx-back" aria-hidden="true"></div>
+  <div class="fx-layer fx-front" id="fx-front" aria-hidden="true"></div>
 
   <div class="shell">
     <header class="topbar">
@@ -2863,10 +3117,13 @@ function kioskHtml(): string {
 
           <div class="scan-status" id="scan-status">
             <div class="scan-symbol" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="symbol-barcode" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M4 7V5a1 1 0 0 1 1-1h2"/><path d="M17 4h2a1 1 0 0 1 1 1v2"/>
                 <path d="M20 17v2a1 1 0 0 1-1 1h-2"/><path d="M7 20H5a1 1 0 0 1-1-1v-2"/>
                 <path d="M7 9h10"/><path d="M7 12h10"/><path d="M7 15h6"/>
+              </svg>
+              <svg class="symbol-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m4.5 12.6 5 5.2L19.5 6.4" stroke-width="2.6"/>
               </svg>
             </div>
             <div>
@@ -2992,7 +3249,219 @@ function kioskHtml(): string {
       { offset: 1, transform: 'translate3d(24px, 70px, 0) scale(.94) rotate(5deg)', backgroundPosition: '100% 74%, 10% 0%, 92% 40%, 20% 100%, 50% 50%, 50% 50%' },
     ];
 
-    const scanSweep = document.getElementById('scan-sweep');
+    const fxFront = document.getElementById('fx-front');
+    const fxBack = document.getElementById('fx-back');
+    const scannerHint = document.querySelector('.barcode-scanner-hint');
+    const scanStatus = document.getElementById('scan-status');
+
+    const SCAN_FLIGHT_MS = 240;
+    let scanBeatUntil = 0;
+    const BURST_COLORS = ['#0a84ff', '#5e5ce6', '#af52de', '#30d158', '#64d2ff'];
+    const BURST_SHAPES = ['', 'is-sparkle', 'is-diamond'];
+
+    function motionReduced() {
+      return !!(reducedMotionQuery && reducedMotionQuery.matches);
+    }
+
+    function centerOf(element) {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      if (!rect.width && !rect.height) return null;
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+
+    function scannerOrigin() {
+      return centerOf(scannerHint) || { x: window.innerWidth - 70, y: window.innerHeight - 70 };
+    }
+
+    function stageCenter() {
+      return centerOf(document.querySelector('.scan-symbol'))
+        || centerOf(scanStatus)
+        || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    }
+
+    function spawnFx(className, layer) {
+      const host = layer === 'back' ? fxBack : fxFront;
+      if (!host) return null;
+      const node = document.createElement('div');
+      node.className = className;
+      host.appendChild(node);
+      return node;
+    }
+
+    // Belt and braces: a backgrounded tab can suspend animations before their finish handler runs.
+    function clearFx() {
+      if (fxFront) fxFront.replaceChildren();
+      if (fxBack) fxBack.replaceChildren();
+    }
+
+    function runFx(node, frames, options) {
+      if (!node) return null;
+      const animation = node.animate(frames, options);
+      const cleanup = () => node.remove();
+      animation.onfinish = cleanup;
+      animation.oncancel = cleanup;
+      return animation;
+    }
+
+    // A single point animated along a quadratic curve, with the streak rotated to its tangent.
+    function flyLightTrail(from, to, options) {
+      const settings = options || {};
+      const duration = settings.duration || SCAN_FLIGHT_MS;
+      const streak = spawnFx('scan-streak' + (settings.departing ? ' is-departing' : ''));
+      if (!streak) return duration;
+
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const bow = settings.bow === undefined ? .2 : settings.bow;
+      const control = {
+        x: from.x + dx * .45 + dy * bow,
+        y: from.y + dy * .45 - dx * bow,
+      };
+
+      const steps = 16;
+      const halfLength = 44;
+      const frames = [];
+      for (let i = 0; i <= steps; i += 1) {
+        const t = i / steps;
+        const inv = 1 - t;
+        const headX = inv * inv * from.x + 2 * inv * t * control.x + t * t * to.x;
+        const headY = inv * inv * from.y + 2 * inv * t * control.y + t * t * to.y;
+        const tangentX = 2 * inv * (control.x - from.x) + 2 * t * (to.x - control.x);
+        const tangentY = 2 * inv * (control.y - from.y) + 2 * t * (to.y - control.y);
+        const angle = Math.atan2(tangentY, tangentX);
+        const stretch = t < .18 ? .45 + t * 3 : (t > .74 ? Math.max(.3, 1 - (t - .74) * 2.4) : 1);
+        const centerX = headX - Math.cos(angle) * halfLength * stretch;
+        const centerY = headY - Math.sin(angle) * halfLength * stretch;
+        frames.push({
+          offset: t,
+          opacity: t < .06 ? 0 : (t > .9 ? 0 : 1),
+          transform: 'translate(' + (centerX - halfLength).toFixed(1) + 'px, ' + (centerY - 3.5).toFixed(1) + 'px)'
+            + ' rotate(' + (angle * 180 / Math.PI).toFixed(1) + 'deg)'
+            + ' scaleX(' + stretch.toFixed(3) + ')',
+        });
+      }
+
+      runFx(streak, frames, { duration: duration, easing: settings.easing || 'cubic-bezier(.32,.02,.2,1)', fill: 'forwards' });
+      return duration;
+    }
+
+    function pulseRipple(point) {
+      const ripple = spawnFx('scan-ripple');
+      if (!ripple) return;
+      ripple.style.left = (point.x - 48) + 'px';
+      ripple.style.top = (point.y - 48) + 'px';
+      runFx(ripple, [
+        { transform: 'scale(.34)', opacity: .85 },
+        { transform: 'scale(3.1)', opacity: 0 },
+      ], { duration: 320, easing: 'cubic-bezier(.16,.8,.3,1)', fill: 'forwards' });
+    }
+
+    function bloomFromDot(point) {
+      const bloom = spawnFx('fx-dot-bloom');
+      if (!bloom) return;
+      bloom.style.left = (point.x - 65) + 'px';
+      bloom.style.top = (point.y - 65) + 'px';
+      runFx(bloom, [
+        { transform: 'scale(.3)', opacity: .9 },
+        { transform: 'scale(2.4)', opacity: 0 },
+      ], { duration: 340, easing: 'cubic-bezier(.2,.75,.3,1)', fill: 'forwards' });
+    }
+
+    function playChoiceWave(button) {
+      if (motionReduced()) return;
+      const origin = centerOf(button);
+      if (!origin) return;
+      const wave = spawnFx('choice-wave', 'back');
+      if (!wave) return;
+      wave.style.left = (origin.x - 70) + 'px';
+      wave.style.top = (origin.y - 70) + 'px';
+      const reach = Math.hypot(
+        Math.max(origin.x, window.innerWidth - origin.x),
+        Math.max(origin.y, window.innerHeight - origin.y)
+      );
+      const scale = Math.max(2, (reach * 2.2) / 140);
+      runFx(wave, [
+        { transform: 'scale(.16)', opacity: 0 },
+        { transform: 'scale(' + (scale * .34).toFixed(2) + ')', opacity: 1, offset: .3 },
+        { transform: 'scale(' + scale.toFixed(2) + ')', opacity: 0 },
+      ], { duration: 640, easing: 'cubic-bezier(.22,.7,.28,1)', fill: 'forwards' });
+    }
+
+    // Restrained burst: a dozen small marks, one ring, one background bloom. No confetti.
+    function playSuccessFx(kind) {
+      if (motionReduced()) return;
+      const origin = stageCenter();
+      const departure = kind === 'checkout';
+
+      const ring = spawnFx('success-ring' + (departure ? ' is-departure' : ''));
+      if (ring) {
+        ring.style.left = (origin.x - 60) + 'px';
+        ring.style.top = (origin.y - 60) + 'px';
+        runFx(ring, [
+          { transform: 'scale(.5)', opacity: .8 },
+          { transform: 'scale(2.5)', opacity: 0 },
+        ], { duration: departure ? 620 : 560, easing: 'cubic-bezier(.16,.82,.28,1)', fill: 'forwards' });
+      }
+
+      const bloom = spawnFx('aurora-bloom' + (departure ? ' is-departure' : ''), 'back');
+      if (bloom) {
+        bloom.style.left = 'calc(' + Math.round(origin.x) + 'px - 65vmax)';
+        bloom.style.top = 'calc(' + Math.round(origin.y) + 'px - 65vmax)';
+        runFx(bloom, [
+          { transform: 'scale(.62)', opacity: 0 },
+          { transform: 'scale(.86)', opacity: 1, offset: .3 },
+          { transform: 'scale(1.05)', opacity: 0 },
+        ], { duration: 720, easing: 'cubic-bezier(.24,.72,.3,1)', fill: 'forwards' });
+      }
+
+      const count = 11;
+      for (let i = 0; i < count; i += 1) {
+        const piece = spawnFx('burst-piece ' + BURST_SHAPES[i % BURST_SHAPES.length]);
+        if (!piece) break;
+        piece.style.color = BURST_COLORS[i % BURST_COLORS.length];
+
+        const spread = departure ? 1.15 : Math.PI * 2;
+        const base = departure ? -0.5 : (Math.PI * 2 * i) / count;
+        const angle = departure
+          ? base + (i / count) * spread - spread / 2 + (Math.random() - .5) * .22
+          : base + (Math.random() - .5) * .38;
+        const distance = departure
+          ? 96 + Math.random() * 78
+          : 62 + Math.random() * 68;
+        const size = departure ? .8 + Math.random() * .4 : .7 + Math.random() * .55;
+        const duration = departure ? 700 + Math.random() * 120 : 470 + Math.random() * 80;
+
+        piece.style.left = (origin.x - 7) + 'px';
+        piece.style.top = (origin.y - 7) + 'px';
+
+        const endX = Math.cos(angle) * distance;
+        const endY = Math.sin(angle) * distance - (departure ? 22 : 0);
+        const frames = departure
+          ? [
+              { transform: 'translate(0, 0) scale(' + size.toFixed(2) + ') rotate(0deg)', opacity: 0 },
+              { transform: 'translate(' + (endX * .28).toFixed(1) + 'px, ' + (endY * .28).toFixed(1) + 'px) scale(' + size.toFixed(2) + ') rotate(24deg)', opacity: .95, offset: .22 },
+              { transform: 'translate(' + endX.toFixed(1) + 'px, ' + endY.toFixed(1) + 'px) scale(' + (size * .74).toFixed(2) + ') rotate(58deg)', opacity: 0 },
+            ]
+          : [
+              { transform: 'translate(0, 0) scale(.25) rotate(0deg)', opacity: 0 },
+              { transform: 'translate(' + (endX * .42).toFixed(1) + 'px, ' + (endY * .42).toFixed(1) + 'px) scale(' + size.toFixed(2) + ') rotate(32deg)', opacity: 1, offset: .26 },
+              { transform: 'translate(' + endX.toFixed(1) + 'px, ' + endY.toFixed(1) + 'px) scale(' + (size * .5).toFixed(2) + ') rotate(76deg)', opacity: 0 },
+            ];
+
+        runFx(piece, frames, {
+          duration: duration,
+          delay: departure ? i * 16 : i * 9,
+          easing: departure ? 'cubic-bezier(.2,.62,.3,1)' : 'cubic-bezier(.18,.78,.28,1)',
+          fill: 'forwards',
+        });
+      }
+
+      if (departure) {
+        const edge = { x: window.innerWidth + 90, y: origin.y - window.innerHeight * .22 };
+        flyLightTrail(origin, edge, { duration: 520, bow: -.14, departing: true, easing: 'cubic-bezier(.3,.06,.22,1)' });
+      }
+    }
 
 
     let currentBarcode = '';
@@ -3132,6 +3601,7 @@ function kioskHtml(): string {
     function resetReasonButtons() {
       const grid = document.getElementById('reasons');
       if (grid) delete grid.dataset.selecting;
+      delete document.body.dataset.choosing;
       document.querySelectorAll('.reason.selected').forEach((button) => button.classList.remove('selected'));
     }
 
@@ -3139,7 +3609,9 @@ function kioskHtml(): string {
       resetReasonButtons();
       const grid = document.getElementById('reasons');
       if (grid) grid.dataset.selecting = 'true';
+      document.body.dataset.choosing = 'true';
       button.classList.add('selected');
+      playChoiceWave(button);
     }
 
     function updateFunFact(funFacts) {
@@ -3188,18 +3660,50 @@ function kioskHtml(): string {
       requestAnimationFrame(() => recentClearContinue && recentClearContinue.focus({ preventScroll: true }));
     }
 
+    // Launch at the scanner hint, arrive at the card ~240ms later, then compress, ripple and sweep together.
     function flashScanAccepted() {
       delete document.body.dataset.scanFlash;
+      delete document.body.dataset.scanLaunch;
       void document.body.offsetWidth;
-      document.body.dataset.scanFlash = 'true';
-      if (scanSweep) {
-        scanSweep.classList.remove('is-active');
-        void scanSweep.offsetWidth;
-        scanSweep.classList.add('is-active');
+
+      if (motionReduced()) {
+        document.body.dataset.scanFlash = 'true';
+        setTimeout(() => { delete document.body.dataset.scanFlash; }, 200);
+        return;
       }
+
+      document.body.dataset.scanLaunch = 'true';
+      if (fxFront) {
+        fxFront.classList.remove('is-active');
+        void fxFront.offsetWidth;
+        fxFront.classList.add('is-active');
+      }
+
+      const target = stageCenter();
+      const flight = flyLightTrail(scannerOrigin(), target, { duration: SCAN_FLIGHT_MS, bow: .2 });
+      scanBeatUntil = performance.now() + flight + 130;
+
+      setTimeout(() => { delete document.body.dataset.scanLaunch; }, 320);
       setTimeout(() => {
-        if (document.body.dataset.scanFlash === 'true') delete document.body.dataset.scanFlash;
-      }, 340);
+        document.body.dataset.scanFlash = 'true';
+        pulseRipple(stageCenter());
+        setTimeout(() => {
+          if (document.body.dataset.scanFlash === 'true') delete document.body.dataset.scanFlash;
+        }, 320);
+      }, flight - 20);
+    }
+
+    // The barcode mark collapses into a glowing dot, then blooms into whatever comes next.
+    async function morphToRecognized() {
+      if (motionReduced()) return;
+      const settle = scanBeatUntil - performance.now();
+      if (settle > 0) await sleep(Math.min(settle, 400));
+      const point = stageCenter();
+      document.body.dataset.morph = 'dot';
+      if (screenContent) screenContent.classList.add('is-leaving');
+      await sleep(200);
+      bloomFromDot(point);
+      delete document.body.dataset.morph;
     }
 
     function applyCopy(next) {
@@ -3220,6 +3724,7 @@ function kioskHtml(): string {
       }
 
       screenContent.classList.remove('is-entering');
+      screenContent.classList.remove('is-leaving');
       applyCopy(next);
       void screenContent.offsetWidth;
       screenContent.classList.add('is-entering');
@@ -3239,6 +3744,12 @@ function kioskHtml(): string {
       if (studentForm) studentForm.reset();
       delete document.body.dataset.successType;
       delete document.body.dataset.scanFlash;
+      delete document.body.dataset.scanLaunch;
+      delete document.body.dataset.morph;
+      delete document.body.dataset.lookup;
+      if (screenContent) screenContent.classList.remove('is-leaving');
+      if (fxFront) fxFront.classList.remove('is-active');
+      clearFx();
       resetReasonButtons();
       setStep('idle');
       setTone('idle');
@@ -3345,8 +3856,11 @@ function kioskHtml(): string {
     function showSuccess(title, detail, ms, hintText, successType) {
       clearTimers();
       busy = false;
-      document.body.dataset.successType = successType || 'checkin';
+      const kind = successType || 'checkin';
+      document.body.dataset.successType = kind;
       delete document.body.dataset.scanFlash;
+      delete document.body.dataset.morph;
+      delete document.body.dataset.lookup;
       setStep('success');
       setTone('success');
       setCopy({
@@ -3358,6 +3872,10 @@ function kioskHtml(): string {
         hint: hintText || 'Ready for the next scan.',
         footerStatus: 'Ready',
       });
+      // Wait for the success layout so the burst starts from the check itself.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (document.body.dataset.step === 'success') playSuccessFx(kind);
+      }));
       resetTimer = setTimeout(showIdle, ms || 900);
     }
 
@@ -3443,7 +3961,9 @@ function kioskHtml(): string {
       currentBarcode = scanned;
       footerStatus.textContent = 'Reading';
       flashScanAccepted();
-      workingTimer = setTimeout(showWorking, 240);
+      document.body.dataset.lookup = 'true';
+      // Let the arrival beat finish before the "checking" copy can interrupt it.
+      workingTimer = setTimeout(showWorking, 640);
 
       try {
         const data = await post('/api/library/scan', { barcode: scanned, autoCheckout: true });
@@ -3451,7 +3971,8 @@ function kioskHtml(): string {
 
         if (data.mode === 'checkout') {
           const firstName = data.student && data.student.firstName ? data.student.firstName : 'there';
-          showSuccess('Checked out, ' + firstName, 'See you next time.', 850, 'Ready for the next scan.', 'checkout');
+          await morphToRecognized();
+          showSuccess('Checked out, ' + firstName, 'See you next time.', 1500, 'Ready for the next scan.', 'checkout');
           return;
         }
 
@@ -3459,6 +3980,7 @@ function kioskHtml(): string {
           if (data.recentlyCleared) {
             showRecentlyCleared(data.student);
           } else {
+            await morphToRecognized();
             showReasons(data.student);
           }
           return;
@@ -3474,6 +3996,7 @@ function kioskHtml(): string {
         clearTimeout(workingTimer);
         showError('Could not scan', error instanceof Error ? error.message : 'Try again or see the librarian.');
       } finally {
+        delete document.body.dataset.lookup;
         focusScanner();
       }
     }
@@ -3584,7 +4107,8 @@ function kioskHtml(): string {
       try {
         const reason = button.dataset.reason || '';
         markReasonSelected(button);
-        await sleep(120);
+        // Give the wave a head start so the success screen lands inside it, not after it.
+        await sleep(180);
         await post('/api/library/checkin', { barcode: currentBarcode, reason });
         if (reason === 'Lunch') {
           showSuccess('Checked in, ' + currentFirstName, 'You are all set.', 900, 'Ready for the next scan.', 'checkin');
