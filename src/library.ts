@@ -49,6 +49,7 @@ type CountRow = { count: number };
 type StudentFunFactRow = {
   visits_this_month: number | null;
   minutes_this_year: number | null;
+  recently_cleared: number | null;
 };
 
 type SheetEventPayload = {
@@ -749,10 +750,13 @@ async function findActiveVisitForStudent(env: LibraryEnv, studentRowId: number):
 async function getStudentFunFacts(env: LibraryEnv, studentRowId: number): Promise<{
   visitsThisMonth: number;
   minutesThisYear: number;
+  recentlyCleared: boolean;
 }> {
-  const today = dateInTimezone(new Date());
+  const now = new Date();
+  const today = dateInTimezone(now);
   const monthStart = `${today.slice(0, 7)}-01`;
   const yearStart = `${today.slice(0, 4)}-01-01`;
+  const recentClearCutoff = new Date(now.getTime() - 30 * 1000).toISOString();
   const row = await env.SIGNAGE_DB.prepare(
     `SELECT
        SUM(CASE WHEN checked_in_at >= ? THEN 1 ELSE 0 END) AS visits_this_month,
@@ -760,14 +764,19 @@ async function getStudentFunFacts(env: LibraryEnv, studentRowId: number): Promis
          CASE WHEN checked_out_at IS NULL THEN 0
          ELSE ROUND((julianday(checked_out_at) - julianday(checked_in_at)) * 24 * 60)
          END
-       ), 0) AS minutes_this_year
+       ), 0) AS minutes_this_year,
+       MAX(CASE
+         WHEN checked_out_at >= ? AND checkout_method IN ('librarian', 'clear_all') THEN 1
+         ELSE 0
+       END) AS recently_cleared
      FROM library_visits
      WHERE student_row_id = ? AND checked_in_at >= ?`
-  ).bind(localDateStartIso(monthStart), studentRowId, localDateStartIso(yearStart)).first<StudentFunFactRow>();
+  ).bind(localDateStartIso(monthStart), recentClearCutoff, studentRowId, localDateStartIso(yearStart)).first<StudentFunFactRow>();
 
   return {
     visitsThisMonth: Math.max(0, Number(row?.visits_this_month ?? 0)),
     minutesThisYear: Math.max(0, Number(row?.minutes_this_year ?? 0)),
+    recentlyCleared: Number(row?.recently_cleared ?? 0) === 1,
   };
 }
 
@@ -1828,9 +1837,97 @@ function kioskHtml(): string {
       to { opacity: 1; transform: translateY(0); }
     }
 
+    .recent-clear-warning {
+      display: none;
+      width: min(540px, 100%);
+      margin-top: clamp(20px, 3.2vh, 30px);
+      padding: clamp(20px, 3vh, 28px);
+      border: 1px solid rgba(255, 159, 10, .28);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, .82);
+      box-shadow: 0 18px 54px rgba(160, 90, 0, .12);
+      backdrop-filter: blur(20px) saturate(155%);
+      text-align: center;
+    }
+
+    body[data-step="recent-clear"] .recent-clear-warning {
+      display: grid;
+      justify-items: center;
+      gap: 10px;
+      animation: recentClearIn 360ms var(--motion-ease) both;
+    }
+
+    .recent-clear-icon {
+      width: 44px;
+      height: 44px;
+      color: #ff9f0a;
+      filter: drop-shadow(0 6px 12px rgba(255, 159, 10, .2));
+    }
+
+    .recent-clear-icon svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .recent-clear-title {
+      color: var(--ink);
+      font-size: clamp(18px, 2vw, 24px);
+      line-height: 1.1;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+
+    .recent-clear-detail {
+      max-width: 430px;
+      color: var(--muted);
+      font-size: clamp(14px, 1.5vw, 18px);
+      line-height: 1.3;
+    }
+
+    .recent-clear-actions {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    .recent-clear-actions button {
+      min-height: 50px;
+      border: 0;
+      border-radius: 14px;
+      padding: 0 16px;
+      font: 700 16px/1 var(--font-display);
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: transform 160ms var(--motion-ease), box-shadow 200ms var(--motion-ease), background-color 200ms var(--motion-smooth);
+    }
+
+    .recent-clear-actions button:hover,
+    .recent-clear-actions button:focus-visible { transform: translateY(-1px); }
+    .recent-clear-actions button:active { transform: scale(.985); }
+
+    .recent-clear-continue {
+      background: #007aff;
+      color: #fff;
+      box-shadow: 0 12px 28px rgba(0, 122, 255, .2);
+    }
+
+    .recent-clear-cancel {
+      background: rgba(0, 0, 0, .06);
+      color: var(--ink);
+    }
+
+    @keyframes recentClearIn {
+      from { opacity: 0; transform: translateY(8px) scale(.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
     body[data-step="reasons"] .scan-status,
     body[data-step="new-student"] .scan-status,
-    body[data-step="pairing"] .scan-status {
+    body[data-step="pairing"] .scan-status,
+    body[data-step="recent-clear"] .scan-status {
       display: none;
     }
 
@@ -2107,6 +2204,7 @@ function kioskHtml(): string {
       .brand { font-size: 15px; }
       .reason-grid { grid-template-columns: 1fr; width: min(420px, 100%); }
       .library-fun-fact { width: min(420px, 100%); }
+      .recent-clear-actions { grid-template-columns: 1fr; }
       .reason { min-height: 50px; }
       .reason span { font-size: 21px; }
       .student-form-grid { grid-template-columns: 1fr; }
@@ -2539,6 +2637,21 @@ function kioskHtml(): string {
             </div>
           </div>
 
+          <div class="recent-clear-warning" id="recent-clear-warning" role="alertdialog" aria-labelledby="recent-clear-title" aria-describedby="recent-clear-detail">
+            <span class="recent-clear-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m12 3 9 17H3L12 3Z" stroke-width="1.8"/>
+                <path d="M12 9v5M12 17h.01" stroke-width="1.9"/>
+              </svg>
+            </span>
+            <div class="recent-clear-title" id="recent-clear-title">Quick double-check</div>
+            <div class="recent-clear-detail" id="recent-clear-detail">A librarian just cleared your visit from the dashboard. Would you like to check in again?</div>
+            <div class="recent-clear-actions">
+              <button class="recent-clear-continue" id="recent-clear-continue" type="button">Check in again</button>
+              <button class="recent-clear-cancel" id="recent-clear-cancel" type="button">Cancel</button>
+            </div>
+          </div>
+
           <div class="reason-grid" id="reasons">${reasons}</div>
           <div class="library-fun-fact" id="library-fun-fact" aria-live="polite">
             <span class="fun-fact-icon" aria-hidden="true">
@@ -2615,10 +2728,13 @@ function kioskHtml(): string {
     const newLastName = document.getElementById('new-last-name');
     const newGrade = document.getElementById('new-grade');
     const funFactText = document.getElementById('fun-fact-text');
+    const recentClearContinue = document.getElementById('recent-clear-continue');
+    const recentClearCancel = document.getElementById('recent-clear-cancel');
     const screenContent = document.querySelector('.screen-content');
 
     let currentBarcode = '';
     let currentFirstName = '';
+    let currentFunFacts = null;
     let keyBuffer = '';
     let keyTimer = null;
     let resetTimer = null;
@@ -2702,6 +2818,25 @@ function kioskHtml(): string {
       funFactText.textContent = 'You’ve visited the library ' + visits + ' ' + visitLabel + ' this month and spent ' + minutes + ' ' + minuteLabel + ' here this year.';
     }
 
+    function showRecentlyCleared(student, funFacts) {
+      clearTimers();
+      busy = false;
+      currentFirstName = student && student.firstName ? student.firstName : 'there';
+      currentFunFacts = funFacts || null;
+      setStep('recent-clear');
+      setTone('working');
+      setCopy({
+        eyebrow: 'Double-check',
+        headline: 'You were just checked out.',
+        lead: 'A librarian cleared your visit from the dashboard less than 30 seconds ago.',
+        statusTitle: '',
+        statusDetail: '',
+        hint: 'Choose an option to continue.',
+        footerStatus: 'Confirm',
+      });
+      requestAnimationFrame(() => recentClearContinue && recentClearContinue.focus({ preventScroll: true }));
+    }
+
     function flashScanAccepted() {
       delete document.body.dataset.scanFlash;
       void document.body.offsetWidth;
@@ -2743,6 +2878,7 @@ function kioskHtml(): string {
       busy = false;
       currentBarcode = '';
       currentFirstName = '';
+      currentFunFacts = null;
       keyBuffer = '';
       scanInput.value = '';
       if (studentForm) studentForm.reset();
@@ -2913,6 +3049,7 @@ function kioskHtml(): string {
       busy = false;
       resetReasonButtons();
       currentFirstName = student && student.firstName ? student.firstName : 'there';
+      currentFunFacts = funFacts || null;
       updateFunFact(funFacts);
       setStep('reasons');
       setTone('idle');
@@ -2930,7 +3067,7 @@ function kioskHtml(): string {
     }
 
     function focusScanner() {
-      if (document.body.dataset.step === 'new-student' || document.body.dataset.step === 'pairing') return;
+      if (document.body.dataset.step === 'new-student' || document.body.dataset.step === 'pairing' || document.body.dataset.step === 'recent-clear') return;
       if (document.activeElement && document.activeElement.closest && document.activeElement.closest('button')) return;
       requestAnimationFrame(() => scanInput.focus({ preventScroll: true }));
     }
@@ -2965,7 +3102,11 @@ function kioskHtml(): string {
         }
 
         if (data.mode === 'checkin') {
-          showReasons(data.student, data.funFacts);
+          if (data.funFacts && data.funFacts.recentlyCleared) {
+            showRecentlyCleared(data.student, data.funFacts);
+          } else {
+            showReasons(data.student, data.funFacts);
+          }
           return;
         }
 
@@ -3104,6 +3245,14 @@ function kioskHtml(): string {
     });
 
     document.getElementById('cancel').addEventListener('click', showIdle);
+    recentClearContinue.addEventListener('click', () => {
+      recentClearContinue.blur();
+      showReasons({ firstName: currentFirstName }, currentFunFacts);
+    });
+    recentClearCancel.addEventListener('click', () => {
+      recentClearCancel.blur();
+      showIdle();
+    });
 
     document.addEventListener('pointerdown', (event) => {
       if (event.target && event.target.closest) {
