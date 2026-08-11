@@ -2383,7 +2383,7 @@ function kioskHtml(): string {
         </form>
         <button class="cancel" id="cancel" type="button">Cancel</button>
       </section>
-      <div class="barcode-scanner-hint" aria-label="Barcode Scanner">Barcode Scanner ----&gt;</div>
+      <div class="barcode-scanner-hint" aria-label="Barcode Scanner">Barcode Scanner &rarr;</div>
     </main>
 
     <footer class="footer">
