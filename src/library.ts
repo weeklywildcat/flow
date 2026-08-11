@@ -2357,8 +2357,6 @@ function kioskHtml(): string {
       --orb-duration-primary: 26s;
       --orb-duration-secondary: 32s;
       --orb-opacity: .86;
-      --mesh-duration-primary: 3.4s;
-      --mesh-duration-secondary: 4.6s;
     }
 
     body {
@@ -2372,56 +2370,6 @@ function kioskHtml(): string {
       transition: background-color var(--motion-standard) var(--motion-smooth), color var(--motion-standard) var(--motion-smooth);
     }
 
-    .motion-background {
-      position: fixed;
-      inset: 0;
-      z-index: 0;
-      overflow: hidden;
-      pointer-events: none;
-    }
-
-    .motion-background::before,
-    .motion-background::after {
-      content: "";
-      position: absolute;
-      inset: -24%;
-      opacity: 0;
-      filter: blur(26px) saturate(170%);
-      background-repeat: no-repeat;
-      background-blend-mode: screen;
-      will-change: transform, background-position, opacity;
-      transition: opacity 760ms var(--motion-smooth);
-      animation-play-state: paused;
-    }
-
-    .motion-background::before {
-      background-image:
-        radial-gradient(ellipse at 15% 22%, rgba(0, 122, 255, .7) 0%, rgba(0, 122, 255, .18) 30%, transparent 68%),
-        radial-gradient(ellipse at 80% 18%, rgba(175, 82, 222, .58) 0%, rgba(175, 82, 222, .16) 32%, transparent 72%),
-        radial-gradient(ellipse at 55% 76%, rgba(52, 199, 89, .38) 0%, rgba(52, 199, 89, .1) 30%, transparent 72%),
-        radial-gradient(ellipse at 86% 78%, rgba(255, 45, 85, .34) 0%, rgba(255, 45, 85, .1) 28%, transparent 70%),
-        conic-gradient(from 20deg at 50% 50%, rgba(0, 122, 255, .16), rgba(175, 82, 222, .12), rgba(255, 45, 85, .1), rgba(52, 199, 89, .12), rgba(0, 122, 255, .16));
-      background-size: 125% 125%;
-      animation: kioskMeshFlowPrimary var(--mesh-duration-primary) linear infinite;
-    }
-
-    .motion-background::after {
-      background-image:
-        radial-gradient(ellipse at 8% 72%, rgba(52, 199, 89, .44) 0%, rgba(52, 199, 89, .12) 31%, transparent 72%),
-        radial-gradient(ellipse at 48% 10%, rgba(0, 122, 255, .42) 0%, rgba(0, 122, 255, .1) 30%, transparent 70%),
-        radial-gradient(ellipse at 92% 48%, rgba(255, 45, 85, .4) 0%, rgba(255, 45, 85, .1) 30%, transparent 72%),
-        radial-gradient(ellipse at 42% 88%, rgba(175, 82, 222, .44) 0%, rgba(175, 82, 222, .12) 32%, transparent 70%),
-        conic-gradient(from 200deg at 50% 50%, rgba(52, 199, 89, .12), rgba(0, 122, 255, .14), rgba(175, 82, 222, .12), rgba(255, 45, 85, .1), rgba(52, 199, 89, .12));
-      background-size: 135% 135%;
-      animation: kioskMeshFlowSecondary var(--mesh-duration-secondary) linear infinite;
-    }
-
-    body[data-step="idle"][data-tone="idle"] .motion-background::before,
-    body[data-step="idle"][data-tone="idle"] .motion-background::after {
-      opacity: .98;
-      animation-play-state: running;
-    }
-
     body::before,
     body::after {
       content: "";
@@ -2430,15 +2378,16 @@ function kioskHtml(): string {
       width: clamp(340px, 52vw, 760px);
       height: clamp(340px, 52vw, 760px);
       pointer-events: none;
-      filter: blur(18px) saturate(145%);
+      filter: blur(10px);
       opacity: var(--orb-opacity);
-      will-change: transform, opacity;
-      transition: opacity 760ms var(--motion-smooth), filter 760ms var(--motion-smooth), border-radius 900ms var(--motion-ease);
+      will-change: transform;
     }
 
-    body[data-step="idle"][data-tone="idle"]::before,
-    body[data-step="idle"][data-tone="idle"]::after {
-      opacity: 0;
+    /* Keep the welcome screen lively, then let the background recede during interaction. */
+    body[data-step="idle"][data-tone="idle"] {
+      --orb-duration-primary: 3.8s;
+      --orb-duration-secondary: 5.2s;
+      --orb-opacity: .96;
     }
 
     body::before {
@@ -2457,52 +2406,6 @@ function kioskHtml(): string {
       background: radial-gradient(ellipse at 58% 52%, rgba(255, 45, 85, .28) 0%, rgba(175, 82, 222, .28) 26%, rgba(52, 199, 89, .12) 50%, rgba(52, 199, 89, .03) 66%, transparent 83%);
       animation: kioskOrbDriftAlt var(--orb-duration-secondary) ease-in-out infinite;
       animation-delay: -4.5s;
-    }
-
-    @keyframes kioskMeshFlowPrimary {
-      0% {
-        transform: translate3d(-5%, -4%, 0) scale(1.04);
-        background-position: 0% 0%, 100% 10%, 40% 100%, 85% 80%, 50% 50%;
-      }
-      25% {
-        transform: translate3d(6%, 2%, 0) scale(1.1);
-        background-position: 70% 25%, 20% 0%, 86% 42%, 10% 20%, 20% 80%;
-      }
-      50% {
-        transform: translate3d(3%, 8%, 0) scale(1.06);
-        background-position: 100% 70%, 0% 52%, 44% 0%, 78% 30%, 80% 30%;
-      }
-      75% {
-        transform: translate3d(-8%, 4%, 0) scale(1.12);
-        background-position: 30% 100%, 70% 75%, 0% 55%, 24% 92%, 10% 10%;
-      }
-      100% {
-        transform: translate3d(-5%, -4%, 0) scale(1.04);
-        background-position: 0% 0%, 100% 10%, 40% 100%, 85% 80%, 50% 50%;
-      }
-    }
-
-    @keyframes kioskMeshFlowSecondary {
-      0% {
-        transform: translate3d(5%, 6%, 0) scale(1.08) rotate(2deg);
-        background-position: 100% 75%, 10% 0%, 92% 40%, 20% 100%, 50% 50%;
-      }
-      25% {
-        transform: translate3d(-6%, 0, 0) scale(1.03) rotate(-3deg);
-        background-position: 30% 12%, 78% 42%, 0% 88%, 72% 28%, 80% 20%;
-      }
-      50% {
-        transform: translate3d(-2%, -8%, 0) scale(1.1) rotate(-6deg);
-        background-position: 0% 62%, 100% 100%, 48% 0%, 100% 65%, 20% 80%;
-      }
-      75% {
-        transform: translate3d(8%, -2%, 0) scale(1.04) rotate(1deg);
-        background-position: 76% 100%, 18% 68%, 70% 22%, 8% 42%, 90% 10%;
-      }
-      100% {
-        transform: translate3d(5%, 6%, 0) scale(1.08) rotate(2deg);
-        background-position: 100% 75%, 10% 0%, 92% 40%, 20% 100%, 50% 50%;
-      }
     }
 
     @keyframes kioskOrbDrift {
@@ -2839,7 +2742,6 @@ function kioskHtml(): string {
   </style>
 </head>
 <body data-step="idle" data-tone="idle">
-  <div class="motion-background" aria-hidden="true"></div>
   <div class="shell">
     <header class="topbar">
       <div class="brand"><span>Ninety Six High School Library</span></div>
