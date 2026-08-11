@@ -1287,6 +1287,20 @@ function kioskHtml(): string {
       display: grid;
       place-items: center;
       padding: clamp(16px, 2.8vh, 28px) clamp(24px, 4vw, 54px);
+      position: relative;
+    }
+
+    .barcode-scanner-hint {
+      position: absolute;
+      right: clamp(16px, 3vw, 38px);
+      bottom: clamp(10px, 1.8vh, 20px);
+      z-index: 1;
+      color: #007aff;
+      font-size: clamp(13px, 1.5vw, 18px);
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: .01em;
+      white-space: nowrap;
     }
 
     .screen {
@@ -2369,6 +2383,7 @@ function kioskHtml(): string {
         </form>
         <button class="cancel" id="cancel" type="button">Cancel</button>
       </section>
+      <div class="barcode-scanner-hint" aria-label="Barcode Scanner">Barcode Scanner ----&gt;</div>
     </main>
 
     <footer class="footer">
