@@ -2334,6 +2334,18 @@ function kioskHtml(): string {
     }
 
     /* Kiosk visual refinements; motion is tuned for quick kiosk visits. */
+    @property --mesh-alpha {
+      syntax: "<number>";
+      inherits: true;
+      initial-value: 0;
+    }
+
+    @property --blob-alpha {
+      syntax: "<number>";
+      inherits: true;
+      initial-value: 1;
+    }
+
     :root {
       --bg: #f5f5f7;
       --surface: rgba(255, 255, 255, .9);
@@ -2354,9 +2366,11 @@ function kioskHtml(): string {
       --motion-ease: cubic-bezier(.22, 1, .36, 1);
       --motion-smooth: cubic-bezier(.4, 0, .2, 1);
       --motion-standard: 420ms;
-      --orb-duration-primary: 26s;
-      --orb-duration-secondary: 32s;
       --orb-opacity: .86;
+      --mesh-alpha: 0;
+      --blob-alpha: 1;
+      --orb-blur: 10px;
+      --orb-saturation: 145%;
     }
 
     body {
@@ -2367,59 +2381,68 @@ function kioskHtml(): string {
         radial-gradient(circle at 16% 4%, rgba(0, 122, 255, .16), transparent 36%),
         radial-gradient(circle at 84% 96%, rgba(175, 82, 222, .12), transparent 34%);
       background-repeat: no-repeat;
-      transition: background-color var(--motion-standard) var(--motion-smooth), color var(--motion-standard) var(--motion-smooth);
+      transition:
+        background-color var(--motion-standard) var(--motion-smooth),
+        color var(--motion-standard) var(--motion-smooth),
+        --mesh-alpha 840ms var(--motion-smooth),
+        --blob-alpha 840ms var(--motion-smooth);
     }
 
-    body::before,
-    body::after {
-      content: "";
+    .motion-background {
       position: fixed;
+      inset: 0;
       z-index: 0;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .motion-orb {
+      position: absolute;
       width: clamp(340px, 52vw, 760px);
       height: clamp(340px, 52vw, 760px);
       pointer-events: none;
-      filter: blur(10px);
+      filter: blur(var(--orb-blur)) saturate(var(--orb-saturation));
       opacity: var(--orb-opacity);
-      will-change: transform;
+      background-blend-mode: screen;
+      will-change: transform, background-position, opacity;
+      transition: opacity 760ms var(--motion-smooth), filter 760ms var(--motion-smooth), border-radius 900ms var(--motion-ease);
     }
 
     /* Keep the welcome screen lively, then let the background recede during interaction. */
     body[data-step="idle"][data-tone="idle"] {
-      --orb-duration-primary: 3.8s;
-      --orb-duration-secondary: 5.2s;
-      --orb-opacity: .96;
+      --orb-opacity: .98;
+      --mesh-alpha: .96;
+      --blob-alpha: .28;
+      --orb-blur: 18px;
+      --orb-saturation: 170%;
     }
 
-    body::before {
+    .motion-orb-primary {
       top: clamp(-160px, -8vw, -50px);
       left: clamp(-150px, -6vw, -35px);
       border-radius: 46% 54% 61% 39% / 47% 42% 58% 53%;
-      background: radial-gradient(ellipse at 44% 44%, rgba(0, 122, 255, .42) 0%, rgba(88, 86, 214, .28) 24%, rgba(175, 82, 222, .16) 48%, rgba(175, 82, 222, .05) 64%, transparent 82%);
-      animation: kioskOrbDrift var(--orb-duration-primary) ease-in-out infinite;
-      animation-delay: -2.25s;
+      background:
+        radial-gradient(ellipse at 15% 22%, rgb(0 122 255 / calc(.7 * var(--mesh-alpha))) 0%, rgb(0 122 255 / calc(.18 * var(--mesh-alpha))) 30%, transparent 68%),
+        radial-gradient(ellipse at 80% 18%, rgb(175 82 222 / calc(.58 * var(--mesh-alpha))) 0%, rgb(175 82 222 / calc(.16 * var(--mesh-alpha))) 32%, transparent 72%),
+        radial-gradient(ellipse at 55% 76%, rgb(52 199 89 / calc(.38 * var(--mesh-alpha))) 0%, rgb(52 199 89 / calc(.1 * var(--mesh-alpha))) 30%, transparent 72%),
+        radial-gradient(ellipse at 86% 78%, rgb(255 45 85 / calc(.34 * var(--mesh-alpha))) 0%, rgb(255 45 85 / calc(.1 * var(--mesh-alpha))) 28%, transparent 70%),
+        conic-gradient(from 20deg at 50% 50%, rgb(0 122 255 / calc(.16 * var(--mesh-alpha))), rgb(175 82 222 / calc(.12 * var(--mesh-alpha))), rgb(255 45 85 / calc(.1 * var(--mesh-alpha))), rgb(52 199 89 / calc(.12 * var(--mesh-alpha))), rgb(0 122 255 / calc(.16 * var(--mesh-alpha)))),
+        radial-gradient(ellipse at 44% 44%, rgb(0 122 255 / calc(.42 * var(--blob-alpha))) 0%, rgb(88 86 214 / calc(.28 * var(--blob-alpha))) 24%, rgb(175 82 222 / calc(.16 * var(--blob-alpha))) 48%, rgb(175 82 222 / calc(.05 * var(--blob-alpha))) 64%, transparent 82%);
+      background-size: 145% 145%;
     }
 
-    body::after {
+    .motion-orb-secondary {
       right: clamp(-160px, -8vw, -50px);
       bottom: clamp(-160px, -8vw, -50px);
       border-radius: 58% 42% 38% 62% / 44% 56% 45% 55%;
-      background: radial-gradient(ellipse at 58% 52%, rgba(255, 45, 85, .28) 0%, rgba(175, 82, 222, .28) 26%, rgba(52, 199, 89, .12) 50%, rgba(52, 199, 89, .03) 66%, transparent 83%);
-      animation: kioskOrbDriftAlt var(--orb-duration-secondary) ease-in-out infinite;
-      animation-delay: -4.5s;
-    }
-
-    @keyframes kioskOrbDrift {
-      0%, 100% { transform: translate3d(-18px, -8px, 0) scale(.92) rotate(-4deg); }
-      25% { transform: translate3d(54px, 40px, 0) scale(1.08) rotate(6deg); }
-      50% { transform: translate3d(86px, 12px, 0) scale(1.02) rotate(10deg); }
-      75% { transform: translate3d(34px, 70px, 0) scale(.96) rotate(1deg); }
-    }
-
-    @keyframes kioskOrbDriftAlt {
-      0%, 100% { transform: translate3d(24px, 70px, 0) scale(.94) rotate(5deg); }
-      25% { transform: translate3d(-42px, 12px, 0) scale(1.04) rotate(-3deg); }
-      50% { transform: translate3d(-78px, -42px, 0) scale(1.08) rotate(-8deg); }
-      75% { transform: translate3d(-16px, 40px, 0) scale(.96) rotate(6deg); }
+      background:
+        radial-gradient(ellipse at 8% 72%, rgb(52 199 89 / calc(.44 * var(--mesh-alpha))) 0%, rgb(52 199 89 / calc(.12 * var(--mesh-alpha))) 31%, transparent 72%),
+        radial-gradient(ellipse at 48% 10%, rgb(0 122 255 / calc(.42 * var(--mesh-alpha))) 0%, rgb(0 122 255 / calc(.1 * var(--mesh-alpha))) 30%, transparent 70%),
+        radial-gradient(ellipse at 92% 48%, rgb(255 45 85 / calc(.4 * var(--mesh-alpha))) 0%, rgb(255 45 85 / calc(.1 * var(--mesh-alpha))) 30%, transparent 72%),
+        radial-gradient(ellipse at 42% 88%, rgb(175 82 222 / calc(.44 * var(--mesh-alpha))) 0%, rgb(175 82 222 / calc(.12 * var(--mesh-alpha))) 32%, transparent 70%),
+        conic-gradient(from 200deg at 50% 50%, rgb(52 199 89 / calc(.12 * var(--mesh-alpha))), rgb(0 122 255 / calc(.14 * var(--mesh-alpha))), rgb(175 82 222 / calc(.12 * var(--mesh-alpha))), rgb(255 45 85 / calc(.1 * var(--mesh-alpha))), rgb(52 199 89 / calc(.12 * var(--mesh-alpha)))),
+        radial-gradient(ellipse at 58% 52%, rgb(255 45 85 / calc(.28 * var(--blob-alpha))) 0%, rgb(175 82 222 / calc(.28 * var(--blob-alpha))) 26%, rgb(52 199 89 / calc(.12 * var(--blob-alpha))) 50%, rgb(52 199 89 / calc(.03 * var(--blob-alpha))) 66%, transparent 83%);
+      background-size: 150% 150%;
     }
 
     .shell {
@@ -2742,6 +2765,10 @@ function kioskHtml(): string {
   </style>
 </head>
 <body data-step="idle" data-tone="idle">
+  <div class="motion-background" aria-hidden="true">
+    <div class="motion-orb motion-orb-primary"></div>
+    <div class="motion-orb motion-orb-secondary"></div>
+  </div>
   <div class="shell">
     <header class="topbar">
       <div class="brand"><span>Ninety Six High School Library</span></div>
@@ -2862,6 +2889,27 @@ function kioskHtml(): string {
     const recentClearContinue = document.getElementById('recent-clear-continue');
     const recentClearCancel = document.getElementById('recent-clear-cancel');
     const screenContent = document.querySelector('.screen-content');
+    const motionPrimary = document.querySelector('.motion-orb-primary');
+    const motionSecondary = document.querySelector('.motion-orb-secondary');
+    const reducedMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    const motionAnimations = [];
+    let motionRampFrame = null;
+
+    const primaryMotionFrames = [
+      { offset: 0, transform: 'translate3d(-18px, -8px, 0) scale(.92) rotate(-4deg)', backgroundPosition: '8% 18%, 86% 12%, 32% 90%, 88% 78%, 50% 50%, 50% 50%' },
+      { offset: .25, transform: 'translate3d(54px, 40px, 0) scale(1.08) rotate(6deg)', backgroundPosition: '68% 24%, 20% 2%, 84% 44%, 12% 20%, 22% 82%, 46% 42%' },
+      { offset: .5, transform: 'translate3d(86px, 12px, 0) scale(1.02) rotate(10deg)', backgroundPosition: '100% 72%, 0% 52%, 44% 0%, 76% 30%, 82% 28%, 42% 54%' },
+      { offset: .75, transform: 'translate3d(34px, 70px, 0) scale(.96) rotate(1deg)', backgroundPosition: '30% 100%, 72% 76%, 0% 58%, 22% 92%, 12% 12%, 54% 46%' },
+      { offset: 1, transform: 'translate3d(-18px, -8px, 0) scale(.92) rotate(-4deg)', backgroundPosition: '8% 18%, 86% 12%, 32% 90%, 88% 78%, 50% 50%, 50% 50%' },
+    ];
+
+    const secondaryMotionFrames = [
+      { offset: 0, transform: 'translate3d(24px, 70px, 0) scale(.94) rotate(5deg)', backgroundPosition: '100% 74%, 10% 0%, 92% 40%, 20% 100%, 50% 50%, 50% 50%' },
+      { offset: .25, transform: 'translate3d(-42px, 12px, 0) scale(1.04) rotate(-3deg)', backgroundPosition: '32% 14%, 78% 44%, 0% 88%, 72% 28%, 82% 22%, 44% 48%' },
+      { offset: .5, transform: 'translate3d(-78px, -42px, 0) scale(1.08) rotate(-8deg)', backgroundPosition: '0% 62%, 100% 100%, 48% 0%, 100% 65%, 20% 80%, 58% 48%' },
+      { offset: .75, transform: 'translate3d(-16px, 40px, 0) scale(.96) rotate(6deg)', backgroundPosition: '76% 100%, 18% 68%, 70% 22%, 8% 42%, 90% 10%, 52% 54%' },
+      { offset: 1, transform: 'translate3d(24px, 70px, 0) scale(.94) rotate(5deg)', backgroundPosition: '100% 74%, 10% 0%, 92% 40%, 20% 100%, 50% 50%, 50% 50%' },
+    ];
 
     let currentBarcode = '';
     let currentFirstName = '';
@@ -2911,8 +2959,79 @@ function kioskHtml(): string {
       }
     }
 
-    function setTone(tone) { document.body.dataset.tone = tone; }
-    function setStep(step) { document.body.dataset.step = step; }
+    function updatePlaybackRate(animation, rate) {
+      if (typeof animation.updatePlaybackRate === 'function') {
+        animation.updatePlaybackRate(rate);
+      } else {
+        animation.playbackRate = rate;
+      }
+    }
+
+    function updateMotionSpeed(immediate = false) {
+      if (!motionAnimations.length) return;
+      if (motionRampFrame !== null) {
+        cancelAnimationFrame(motionRampFrame);
+        motionRampFrame = null;
+      }
+
+      const welcome = document.body.dataset.step === 'idle' && document.body.dataset.tone === 'idle';
+      const targetRates = welcome ? motionAnimations.map((entry) => entry.welcomeRate) : motionAnimations.map(() => 1);
+      const startRates = motionAnimations.map((entry) => entry.animation.playbackRate || 1);
+
+      if (immediate) {
+        motionAnimations.forEach((entry, index) => updatePlaybackRate(entry.animation, targetRates[index]));
+        return;
+      }
+
+      const startedAt = performance.now();
+      const rampDuration = 760;
+      const tick = (now) => {
+        const progress = Math.min(1, (now - startedAt) / rampDuration);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        motionAnimations.forEach((entry, index) => {
+          const rate = startRates[index] + (targetRates[index] - startRates[index]) * eased;
+          updatePlaybackRate(entry.animation, rate);
+        });
+        if (progress < 1) {
+          motionRampFrame = requestAnimationFrame(tick);
+        } else {
+          motionRampFrame = null;
+        }
+      };
+      motionRampFrame = requestAnimationFrame(tick);
+    }
+
+    function initMotion() {
+      if (!motionPrimary || !motionSecondary || typeof motionPrimary.animate !== 'function' || reducedMotionQuery?.matches) return;
+
+      const primaryAnimation = motionPrimary.animate(primaryMotionFrames, {
+        duration: 26000,
+        easing: 'ease-in-out',
+        iterations: Infinity,
+      });
+      const secondaryAnimation = motionSecondary.animate(secondaryMotionFrames, {
+        duration: 32000,
+        easing: 'ease-in-out',
+        iterations: Infinity,
+      });
+      primaryAnimation.currentTime = 2250;
+      secondaryAnimation.currentTime = 4500;
+      motionAnimations.push(
+        { animation: primaryAnimation, welcomeRate: 26000 / 3800 },
+        { animation: secondaryAnimation, welcomeRate: 32000 / 5200 },
+      );
+      updateMotionSpeed(true);
+    }
+
+    function setTone(tone) {
+      document.body.dataset.tone = tone;
+      updateMotionSpeed();
+    }
+
+    function setStep(step) {
+      document.body.dataset.step = step;
+      updateMotionSpeed();
+    }
 
     function clearTimers() {
       clearTimeout(keyTimer);
@@ -3422,6 +3541,7 @@ function kioskHtml(): string {
       }
     });
 
+    initMotion();
     verifyKioskConnection();
   </script>
 </body>
