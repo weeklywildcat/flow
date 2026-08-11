@@ -1,0 +1,65 @@
+changed-files-labels-limit: 4
+
+area:kiosk:
+  - any:
+      - head-branch:
+          - kiosk
+          - scanner
+      - changed-files:
+          - any-glob-to-any-file:
+              - src/kiosk/**
+              - public/kiosk/**
+
+area:web-app:
+  - any:
+      - head-branch:
+          - web
+          - manage
+          - dashboard
+      - changed-files:
+          - any-glob-to-any-file:
+              - src/web/**
+              - src/manage/**
+              - public/manage/**
+
+area:backend:
+  - any:
+      - head-branch:
+          - api
+          - backend
+          - database
+          - db
+      - changed-files:
+          - any-glob-to-any-file:
+              - src/api/**
+              - src/server/**
+              - migrations/**
+              - schema/**
+              - wrangler.toml
+              - wrangler.json
+              - wrangler.jsonc
+
+area:github:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**
+
+area:dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - package.json
+          - package-lock.json
+          - npm-shrinkwrap.json
+          - yarn.lock
+          - pnpm-lock.yaml
+
+area:docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*.md'
+          - docs/**
+
+area:source:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/**
