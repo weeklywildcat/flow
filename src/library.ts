@@ -2044,9 +2044,8 @@ function kioskHtml(): string {
       z-index: 0;
       width: clamp(340px, 52vw, 760px);
       height: clamp(340px, 52vw, 760px);
-      border-radius: 50%;
       pointer-events: none;
-      filter: blur(2px);
+      filter: blur(10px);
       opacity: .86;
       will-change: transform;
     }
@@ -2054,27 +2053,33 @@ function kioskHtml(): string {
     body::before {
       top: clamp(-160px, -8vw, -50px);
       left: clamp(-150px, -6vw, -35px);
-      background: radial-gradient(circle at 44% 44%, rgba(0, 122, 255, .4), rgba(88, 86, 214, .23) 38%, rgba(175, 82, 222, .13) 56%, transparent 74%);
-      animation: kioskOrbDrift 5.5s ease-in-out infinite;
+      border-radius: 46% 54% 61% 39% / 47% 42% 58% 53%;
+      background: radial-gradient(ellipse at 44% 44%, rgba(0, 122, 255, .42) 0%, rgba(88, 86, 214, .28) 24%, rgba(175, 82, 222, .16) 48%, rgba(175, 82, 222, .05) 64%, transparent 82%);
+      animation: kioskOrbDrift 9s ease-in-out infinite;
+      animation-delay: -2.25s;
     }
 
     body::after {
       right: clamp(-160px, -8vw, -50px);
       bottom: clamp(-160px, -8vw, -50px);
-      background: radial-gradient(circle at 58% 52%, rgba(255, 45, 85, .22), rgba(175, 82, 222, .24) 40%, rgba(52, 199, 89, .1) 58%, transparent 74%);
-      animation: kioskOrbDriftAlt 6.5s ease-in-out infinite;
+      border-radius: 58% 42% 38% 62% / 44% 56% 45% 55%;
+      background: radial-gradient(ellipse at 58% 52%, rgba(255, 45, 85, .28) 0%, rgba(175, 82, 222, .28) 26%, rgba(52, 199, 89, .12) 50%, rgba(52, 199, 89, .03) 66%, transparent 83%);
+      animation: kioskOrbDriftAlt 11s ease-in-out infinite;
+      animation-delay: -4.5s;
     }
 
     @keyframes kioskOrbDrift {
-      0% { transform: translate3d(-18px, -8px, 0) scale(.92) rotate(-4deg); }
-      55% { transform: translate3d(78px, 50px, 0) scale(1.1) rotate(8deg); }
-      100% { transform: translate3d(18px, 86px, 0) scale(.98) rotate(-2deg); }
+      0%, 100% { transform: translate3d(-18px, -8px, 0) scale(.92) rotate(-4deg); }
+      25% { transform: translate3d(54px, 40px, 0) scale(1.08) rotate(6deg); }
+      50% { transform: translate3d(86px, 12px, 0) scale(1.02) rotate(10deg); }
+      75% { transform: translate3d(34px, 70px, 0) scale(.96) rotate(1deg); }
     }
 
     @keyframes kioskOrbDriftAlt {
-      0% { transform: translate3d(24px, 70px, 0) scale(.94) rotate(5deg); }
-      50% { transform: translate3d(-72px, -40px, 0) scale(1.08) rotate(-8deg); }
-      100% { transform: translate3d(-12px, 8px, 0) scale(1) rotate(2deg); }
+      0%, 100% { transform: translate3d(24px, 70px, 0) scale(.94) rotate(5deg); }
+      25% { transform: translate3d(-42px, 12px, 0) scale(1.04) rotate(-3deg); }
+      50% { transform: translate3d(-78px, -42px, 0) scale(1.08) rotate(-8deg); }
+      75% { transform: translate3d(-16px, 40px, 0) scale(.96) rotate(6deg); }
     }
 
     .shell {
