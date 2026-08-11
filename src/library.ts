@@ -49,7 +49,23 @@ type CountRow = { count: number };
 type StudentFunFactRow = {
   visits_this_month: number | null;
   minutes_this_year: number | null;
-  recently_cleared: number | null;
+};
+
+type StudentScanLookupRow = {
+  id: number;
+  student_id: string;
+  barcode: string;
+  first_name: string;
+  last_name: string;
+  grade: string | null;
+  active: number;
+  visit_id: number | null;
+  visit_student_row_id: number | null;
+  visit_reason: string | null;
+  visit_checked_in_at: string | null;
+  visit_checked_out_at: string | null;
+  visit_checkout_method: string | null;
+  visit_checked_out_by: string | null;
 };
 
 type SheetEventPayload = {
@@ -122,7 +138,7 @@ export default {
 
     try {
       if (pathname.startsWith("/api/library/")) {
-        const kioskAllowed = pathname === "/api/library/scan" || pathname === "/api/library/checkin" || pathname === "/api/library/checkout" || pathname === "/api/library/create-student" || pathname === "/api/library/kiosk-status";
+        const kioskAllowed = pathname === "/api/library/scan" || pathname === "/api/library/checkin" || pathname === "/api/library/checkout" || pathname === "/api/library/create-student" || pathname === "/api/library/student-fun-facts" || pathname === "/api/library/kiosk-status";
         const pairingAllowed = pathname === "/api/library/kiosk-enroll";
         const authorized = pairingAllowed || (kioskAllowed ? await isKioskOrStaffAuthorized(request, env) : isStaffAuthorized(request));
         if (!authorized) {
@@ -155,7 +171,7 @@ export default {
       }
 
       if (pathname === "/api/library/scan") {
-        return request.method === "POST" ? handleScan(request, env) : methodNotAllowed(["POST"]);
+        return request.method === "POST" ? handleScan(request, env, ctx) : methodNotAllowed(["POST"]);
       }
 
       if (pathname === "/api/library/checkin") {
@@ -168,6 +184,10 @@ export default {
 
       if (pathname === "/api/library/create-student") {
         return request.method === "POST" ? handleCreateStudent(request, env, ctx) : methodNotAllowed(["POST"]);
+      }
+
+      if (pathname === "/api/library/student-fun-facts") {
+        return request.method === "POST" ? handleStudentFunFacts(request, env) : methodNotAllowed(["POST"]);
       }
 
       if (pathname === "/api/library/kiosk-status") {
@@ -236,7 +256,42 @@ export default {
   },
 } satisfies ExportedHandler<LibraryEnv>;
 
-async function handleScan(request: Request, env: LibraryEnv): Promise<Response> {
+async function handleScan(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
+
+  const barcode = normalizeBarcode(body.barcode);
+  if (!barcode) return json({ error: "Scan a student ID." }, 400);
+
+  const scanLookup = await findStudentAndActiveVisit(env, barcode);
+  if (!scanLookup) {
+    return json({ mode: "new_student", barcode, grades: GRADE_OPTIONS, reasons: REASONS });
+  }
+
+  const { student, activeVisit } = scanLookup;
+
+  if (activeVisit) {
+    if (body.autoCheckout === true) {
+      const checkedOutAt = new Date().toISOString();
+      const updatedVisit = await completeCheckout(env, ctx, activeVisit, "scan_out", getActor(request), checkedOutAt);
+      if (!updatedVisit) return json({ error: "The visit was already checked out." }, 409);
+      return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(updatedVisit) });
+    }
+
+    return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(activeVisit) });
+  }
+
+  const recentlyCleared = await hasRecentDashboardClear(env, student.id);
+
+  return json({
+    mode: "checkin",
+    student: publicStudent(student),
+    recentlyCleared,
+    reasons: REASONS,
+  });
+}
+
+async function handleStudentFunFacts(request: Request, env: LibraryEnv): Promise<Response> {
   const body = await readJsonBody(request);
   if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
 
@@ -244,27 +299,9 @@ async function handleScan(request: Request, env: LibraryEnv): Promise<Response> 
   if (!barcode) return json({ error: "Scan a student ID." }, 400);
 
   const student = await findStudentByBarcode(env, barcode);
-  if (!student) {
-    return json({ mode: "new_student", barcode, grades: GRADE_OPTIONS, reasons: REASONS, state: await getCurrentState(env, false) });
-  }
+  if (!student) return json({ error: "Student was not found." }, 404);
 
-  const [activeVisit, state, funFacts] = await Promise.all([
-    findActiveVisitForStudent(env, student.id),
-    getCurrentState(env, false),
-    getStudentFunFacts(env, student.id),
-  ]);
-
-  if (activeVisit) {
-    return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(activeVisit), state });
-  }
-
-  return json({
-    mode: "checkin",
-    student: publicStudent(student),
-    funFacts,
-    reasons: REASONS,
-    state,
-  });
+  return json({ funFacts: await getStudentFunFacts(env, student.id) });
 }
 
 async function handleCheckin(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
@@ -338,12 +375,7 @@ async function handleCheckout(request: Request, env: LibraryEnv, ctx: ExecutionC
     return json({ error: "No active visit was found." }, 404);
   }
 
-  await checkoutVisit(env, visit.id, checkoutMethod, actor, now);
-  const updatedVisit = await getVisitById(env, visit.id);
-
-  if (updatedVisit) {
-    await queueSheetEvent(env, ctx, sheetCheckoutPayload("SIGN_OUT", updatedVisit, checkoutMethod, actor, now));
-  }
+  const updatedVisit = await completeCheckout(env, ctx, visit, checkoutMethod, actor, now);
 
   return json({ ok: true, visit: updatedVisit ? visitPayload(updatedVisit) : null, state: await getCurrentState(env, true) });
 }
@@ -740,6 +772,67 @@ async function findStudentByBarcode(env: LibraryEnv, barcode: string): Promise<S
   return row ?? null;
 }
 
+async function findStudentAndActiveVisit(env: LibraryEnv, barcode: string): Promise<{
+  student: StudentRow;
+  activeVisit: VisitRow | null;
+} | null> {
+  const row = await env.SIGNAGE_DB.prepare(
+    `SELECT
+       s.id,
+       s.student_id,
+       s.barcode,
+       s.first_name,
+       s.last_name,
+       s.grade,
+       s.active,
+       v.id AS visit_id,
+       v.student_row_id AS visit_student_row_id,
+       v.reason AS visit_reason,
+       v.checked_in_at AS visit_checked_in_at,
+       v.checked_out_at AS visit_checked_out_at,
+       v.checkout_method AS visit_checkout_method,
+       v.checked_out_by AS visit_checked_out_by
+     FROM library_students s
+     LEFT JOIN library_visits v
+       ON v.student_row_id = s.id AND v.checked_out_at IS NULL
+     WHERE s.barcode = ? AND s.active = 1
+     ORDER BY v.checked_in_at DESC
+     LIMIT 1`
+  ).bind(barcode).first<StudentScanLookupRow>();
+  if (!row) return null;
+
+  const student: StudentRow = {
+    id: row.id,
+    student_id: row.student_id,
+    barcode: row.barcode,
+    first_name: row.first_name,
+    last_name: row.last_name,
+    grade: row.grade,
+    active: row.active,
+  };
+
+  if (row.visit_id === null || row.visit_student_row_id === null || row.visit_reason === null || row.visit_checked_in_at === null) {
+    return { student, activeVisit: null };
+  }
+
+  return {
+    student,
+    activeVisit: {
+      id: row.visit_id,
+      student_row_id: row.visit_student_row_id,
+      student_id: row.student_id,
+      first_name: row.first_name,
+      last_name: row.last_name,
+      grade: row.grade,
+      reason: row.visit_reason,
+      checked_in_at: row.visit_checked_in_at,
+      checked_out_at: row.visit_checked_out_at,
+      checkout_method: row.visit_checkout_method,
+      checked_out_by: row.visit_checked_out_by,
+    },
+  };
+}
+
 async function findActiveVisitForStudent(env: LibraryEnv, studentRowId: number): Promise<VisitRow | null> {
   const row = await env.SIGNAGE_DB.prepare(
     `${visitSelectSql()} WHERE v.student_row_id = ? AND v.checked_out_at IS NULL ORDER BY v.checked_in_at DESC LIMIT 1`
@@ -750,13 +843,10 @@ async function findActiveVisitForStudent(env: LibraryEnv, studentRowId: number):
 async function getStudentFunFacts(env: LibraryEnv, studentRowId: number): Promise<{
   visitsThisMonth: number;
   minutesThisYear: number;
-  recentlyCleared: boolean;
 }> {
-  const now = new Date();
-  const today = dateInTimezone(now);
+  const today = dateInTimezone(new Date());
   const monthStart = `${today.slice(0, 7)}-01`;
   const yearStart = `${today.slice(0, 4)}-01-01`;
-  const recentClearCutoff = new Date(now.getTime() - 30 * 1000).toISOString();
   const row = await env.SIGNAGE_DB.prepare(
     `SELECT
        SUM(CASE WHEN checked_in_at >= ? THEN 1 ELSE 0 END) AS visits_this_month,
@@ -764,20 +854,29 @@ async function getStudentFunFacts(env: LibraryEnv, studentRowId: number): Promis
          CASE WHEN checked_out_at IS NULL THEN 0
          ELSE ROUND((julianday(checked_out_at) - julianday(checked_in_at)) * 24 * 60)
          END
-       ), 0) AS minutes_this_year,
-       MAX(CASE
-         WHEN checked_out_at >= ? AND checkout_method IN ('librarian', 'clear_all') THEN 1
-         ELSE 0
-       END) AS recently_cleared
+       ), 0) AS minutes_this_year
      FROM library_visits
      WHERE student_row_id = ? AND checked_in_at >= ?`
-  ).bind(localDateStartIso(monthStart), recentClearCutoff, studentRowId, localDateStartIso(yearStart)).first<StudentFunFactRow>();
+  ).bind(localDateStartIso(monthStart), studentRowId, localDateStartIso(yearStart)).first<StudentFunFactRow>();
 
   return {
     visitsThisMonth: Math.max(0, Number(row?.visits_this_month ?? 0)),
     minutesThisYear: Math.max(0, Number(row?.minutes_this_year ?? 0)),
-    recentlyCleared: Number(row?.recently_cleared ?? 0) === 1,
   };
+}
+
+async function hasRecentDashboardClear(env: LibraryEnv, studentRowId: number): Promise<boolean> {
+  const cutoff = new Date(Date.now() - 30 * 1000).toISOString();
+  const row = await env.SIGNAGE_DB.prepare(
+    `SELECT 1 AS found
+     FROM library_visits
+     WHERE student_row_id = ?
+       AND checked_out_at >= ?
+       AND checkout_method IN ('librarian', 'clear_all')
+     ORDER BY checked_out_at DESC
+     LIMIT 1`
+  ).bind(studentRowId, cutoff).first<{ found: number }>();
+  return Boolean(row?.found);
 }
 
 async function getVisitById(env: LibraryEnv, visitId: number): Promise<VisitRow | null> {
@@ -809,12 +908,34 @@ function visitSelectSql(): string {
     JOIN library_students s ON s.id = v.student_row_id`;
 }
 
-async function checkoutVisit(env: LibraryEnv, visitId: number, method: CheckoutMethod, actor: string, checkedOutAt: string): Promise<void> {
-  await env.SIGNAGE_DB.prepare(
+async function checkoutVisit(env: LibraryEnv, visitId: number, method: CheckoutMethod, actor: string, checkedOutAt: string): Promise<boolean> {
+  const result = await env.SIGNAGE_DB.prepare(
     `UPDATE library_visits
      SET checked_out_at = ?, checkout_method = ?, checked_out_by = ?
      WHERE id = ? AND checked_out_at IS NULL`
   ).bind(checkedOutAt, method, actor, visitId).run();
+  return Number(result.meta.changes ?? 0) > 0;
+}
+
+async function completeCheckout(
+  env: LibraryEnv,
+  ctx: ExecutionContext,
+  visit: VisitRow,
+  method: CheckoutMethod,
+  actor: string,
+  checkedOutAt: string,
+): Promise<VisitRow | null> {
+  const checkedOut = await checkoutVisit(env, visit.id, method, actor, checkedOutAt);
+  if (!checkedOut) return null;
+
+  const updatedVisit: VisitRow = {
+    ...visit,
+    checked_out_at: checkedOutAt,
+    checkout_method: method,
+    checked_out_by: actor,
+  };
+  ctx.waitUntil(queueSheetEvent(env, ctx, sheetCheckoutPayload("SIGN_OUT", updatedVisit, method, actor, checkedOutAt)));
+  return updatedVisit;
 }
 
 async function getCurrentState(env: LibraryEnv, includeStudents: boolean) {
@@ -2734,7 +2855,6 @@ function kioskHtml(): string {
 
     let currentBarcode = '';
     let currentFirstName = '';
-    let currentFunFacts = null;
     let keyBuffer = '';
     let keyTimer = null;
     let resetTimer = null;
@@ -2811,6 +2931,10 @@ function kioskHtml(): string {
 
     function updateFunFact(funFacts) {
       if (!funFactText) return;
+      if (!funFacts) {
+        funFactText.textContent = 'Your library stats are loading…';
+        return;
+      }
       const visits = Math.max(0, Math.round(Number(funFacts && funFacts.visitsThisMonth) || 0));
       const minutes = Math.max(0, Math.round(Number(funFacts && funFacts.minutesThisYear) || 0));
       const visitLabel = visits === 1 ? 'time' : 'times';
@@ -2818,11 +2942,25 @@ function kioskHtml(): string {
       funFactText.textContent = 'You’ve visited the library ' + visits + ' ' + visitLabel + ' this month and spent ' + minutes + ' ' + minuteLabel + ' here this year.';
     }
 
-    function showRecentlyCleared(student, funFacts) {
+    async function loadFunFacts(barcode) {
+      const requestedBarcode = String(barcode || '').trim();
+      if (!requestedBarcode) return;
+      try {
+        const data = await post('/api/library/student-fun-facts', { barcode: requestedBarcode });
+        if (currentBarcode === requestedBarcode && document.body.dataset.step === 'reasons') {
+          updateFunFact(data.funFacts);
+        }
+      } catch {
+        if (currentBarcode === requestedBarcode && document.body.dataset.step === 'reasons' && funFactText) {
+          funFactText.textContent = 'Your library stats will be ready in a moment.';
+        }
+      }
+    }
+
+    function showRecentlyCleared(student) {
       clearTimers();
       busy = false;
       currentFirstName = student && student.firstName ? student.firstName : 'there';
-      currentFunFacts = funFacts || null;
       setStep('recent-clear');
       setTone('working');
       setCopy({
@@ -2878,7 +3016,6 @@ function kioskHtml(): string {
       busy = false;
       currentBarcode = '';
       currentFirstName = '';
-      currentFunFacts = null;
       keyBuffer = '';
       scanInput.value = '';
       if (studentForm) studentForm.reset();
@@ -3044,13 +3181,12 @@ function kioskHtml(): string {
       requestAnimationFrame(() => newFirstName && newFirstName.focus({ preventScroll: true }));
     }
 
-    function showReasons(student, funFacts) {
+    function showReasons(student) {
       clearTimeout(workingTimer);
       busy = false;
       resetReasonButtons();
       currentFirstName = student && student.firstName ? student.firstName : 'there';
-      currentFunFacts = funFacts || null;
-      updateFunFact(funFacts);
+      updateFunFact(null);
       setStep('reasons');
       setTone('idle');
       setCopy({
@@ -3063,6 +3199,7 @@ function kioskHtml(): string {
         footerStatus: 'Choose',
       });
       reasonTimer = setTimeout(showIdle, 20000);
+      void loadFunFacts(currentBarcode);
       focusScanner();
     }
 
@@ -3091,21 +3228,20 @@ function kioskHtml(): string {
       workingTimer = setTimeout(showWorking, 240);
 
       try {
-        const data = await post('/api/library/scan', { barcode: scanned });
+        const data = await post('/api/library/scan', { barcode: scanned, autoCheckout: true });
         clearTimeout(workingTimer);
 
         if (data.mode === 'checkout') {
           const firstName = data.student && data.student.firstName ? data.student.firstName : 'there';
-          await post('/api/library/checkout', { barcode: scanned, method: 'scan_out' });
           showSuccess('Checked out, ' + firstName, 'See you next time.', 850, 'Ready for the next scan.', 'checkout');
           return;
         }
 
         if (data.mode === 'checkin') {
-          if (data.funFacts && data.funFacts.recentlyCleared) {
-            showRecentlyCleared(data.student, data.funFacts);
+          if (data.recentlyCleared) {
+            showRecentlyCleared(data.student);
           } else {
-            showReasons(data.student, data.funFacts);
+            showReasons(data.student);
           }
           return;
         }
@@ -3247,7 +3383,7 @@ function kioskHtml(): string {
     document.getElementById('cancel').addEventListener('click', showIdle);
     recentClearContinue.addEventListener('click', () => {
       recentClearContinue.blur();
-      showReasons({ firstName: currentFirstName }, currentFunFacts);
+      showReasons({ firstName: currentFirstName });
     });
     recentClearCancel.addEventListener('click', () => {
       recentClearCancel.blur();
