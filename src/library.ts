@@ -2036,10 +2036,55 @@ function kioskHtml(): string {
     }
 
     body {
+      position: relative;
+      isolation: isolate;
       background:
         radial-gradient(circle at 12% -10%, rgba(0, 122, 255, .09), transparent 30%),
         radial-gradient(circle at 92% 110%, rgba(175, 82, 222, .055), transparent 28%),
         var(--bg);
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      z-index: 0;
+      width: clamp(280px, 42vw, 680px);
+      height: clamp(280px, 42vw, 680px);
+      border-radius: 50%;
+      pointer-events: none;
+      filter: blur(4px);
+      opacity: .68;
+      will-change: transform;
+    }
+
+    body::before {
+      top: clamp(-220px, -12vw, -90px);
+      left: clamp(-220px, -10vw, -70px);
+      background: radial-gradient(circle at 42% 42%, rgba(0, 122, 255, .22), rgba(0, 122, 255, .08) 34%, rgba(175, 82, 222, .07) 54%, transparent 74%);
+      animation: kioskOrbDrift 15s ease-in-out infinite alternate;
+    }
+
+    body::after {
+      right: clamp(-220px, -11vw, -80px);
+      bottom: clamp(-220px, -12vw, -90px);
+      background: radial-gradient(circle at 58% 52%, rgba(175, 82, 222, .17), rgba(52, 199, 89, .06) 44%, transparent 73%);
+      animation: kioskOrbDriftAlt 18s ease-in-out infinite alternate;
+    }
+
+    @keyframes kioskOrbDrift {
+      from { transform: translate3d(0, 0, 0) scale(1); }
+      to { transform: translate3d(52px, 34px, 0) scale(1.08); }
+    }
+
+    @keyframes kioskOrbDriftAlt {
+      from { transform: translate3d(0, 0, 0) scale(1.04); }
+      to { transform: translate3d(-46px, -30px, 0) scale(.96); }
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
     }
 
     .topbar,
