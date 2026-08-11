@@ -1777,13 +1777,15 @@ function kioskHtml(): string {
       border: 1.5px solid rgba(0, 122, 255, .34);
       opacity: 0;
       pointer-events: none;
-      animation: radarPing 9.5s cubic-bezier(.2, .74, .3, 1) infinite;
+      animation: radarPing 4.2s cubic-bezier(.2, .74, .3, 1) infinite;
     }
 
+    /* The ping sits in the middle of its cycle, not at 0%, so landing on the idle screen never
+       fires a ring the instant the state changes. */
     @keyframes radarPing {
-      0% { opacity: 0; transform: scale(1); }
-      2% { opacity: .5; }
-      13% { opacity: 0; transform: scale(1.13); }
+      0%, 42% { opacity: 0; transform: scale(1); }
+      45% { opacity: .5; }
+      66% { opacity: 0; transform: scale(1.13); }
       100% { opacity: 0; transform: scale(1.13); }
     }
 
@@ -2572,43 +2574,62 @@ function kioskHtml(): string {
     .fx-back { z-index: 0; }
     .fx-front { z-index: 4; }
 
+    /* No blend mode here: screen over a near-white page is a no-op, which is why the
+       corner reaction was invisible. Straight alpha over the pastel background reads. */
     .fx-front::before {
       content: "";
       position: absolute;
-      inset: 0;
-      background: linear-gradient(135deg, transparent 44%, rgba(0, 122, 255, .18) 50%, rgba(255, 255, 255, .3) 52.5%, transparent 60%);
-      clip-path: circle(0% at 100% 100%);
-      mix-blend-mode: screen;
+      right: 0;
+      bottom: 0;
+      width: min(88vw, 900px);
+      height: min(88vh, 900px);
+      background: radial-gradient(circle at 100% 100%, rgba(0, 122, 255, .3) 0 8%, rgba(0, 122, 255, .16) 20%, rgba(0, 122, 255, .05) 38%, transparent 58%);
       opacity: 0;
     }
 
     .fx-front.is-active::before {
-      animation: scanCornerWash 300ms cubic-bezier(.2, .74, .3, 1) both;
+      animation: scanCornerBloom 340ms cubic-bezier(.2, .74, .3, 1) both;
     }
 
-    @keyframes scanCornerWash {
-      0% { clip-path: circle(0% at 100% 100%); opacity: 0; }
-      20% { opacity: 1; }
-      100% { clip-path: circle(118% at 100% 100%); opacity: 0; }
+    @keyframes scanCornerBloom {
+      0% { opacity: 0; }
+      22% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+
+    /* The wavefront is the part you actually read: a ring leaving the scanner corner and
+       sweeping over the card. The streak rides the same trip as a highlight. */
+    .scan-wavefront {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 120px;
+      height: 120px;
+      border-radius: 999px;
+      border: 2.5px solid rgba(0, 122, 255, .62);
+      box-shadow: 0 0 0 5px rgba(0, 122, 255, .1), 0 0 30px rgba(0, 122, 255, .45);
+      will-change: transform, opacity;
     }
 
     .scan-streak {
       position: absolute;
       left: 0;
       top: 0;
-      width: 88px;
-      height: 7px;
+      width: 132px;
+      height: 11px;
       border-radius: 999px;
-      background: linear-gradient(90deg, rgba(0, 122, 255, 0) 0%, rgba(0, 122, 255, .34) 46%, rgba(130, 200, 255, .9) 82%, #fff 97%);
-      filter: drop-shadow(0 0 9px rgba(0, 122, 255, .6));
+      background: linear-gradient(90deg, rgba(0, 122, 255, 0) 0%, rgba(0, 122, 255, .5) 40%, rgba(120, 195, 255, .96) 78%, #fff 95%);
+      filter: drop-shadow(0 0 14px rgba(0, 122, 255, .85));
       will-change: transform, opacity;
     }
 
     .scan-streak.is-departing {
-      background: linear-gradient(90deg, rgba(175, 82, 222, 0) 0%, rgba(175, 82, 222, .32) 46%, rgba(190, 160, 255, .82) 82%, #fff 97%);
-      filter: drop-shadow(0 0 9px rgba(140, 110, 255, .55));
+      background: linear-gradient(90deg, rgba(175, 82, 222, 0) 0%, rgba(175, 82, 222, .45) 40%, rgba(190, 160, 255, .9) 78%, #fff 95%);
+      filter: drop-shadow(0 0 14px rgba(140, 110, 255, .75));
     }
 
+    /* Soft-edged haloes rather than hard outlines: a crisp expanding annulus over the middle
+       of the screen reads as an eclipse ring, which is jarring on a state change. */
     .scan-ripple {
       position: absolute;
       left: 0;
@@ -2616,8 +2637,8 @@ function kioskHtml(): string {
       width: 96px;
       height: 96px;
       border-radius: 999px;
-      border: 2px solid rgba(0, 122, 255, .5);
-      box-shadow: 0 0 0 7px rgba(0, 122, 255, .07);
+      background: radial-gradient(circle, transparent 0 48%, rgba(0, 122, 255, .34) 62%, rgba(0, 122, 255, .12) 76%, transparent 88%);
+      filter: blur(1.5px);
       will-change: transform, opacity;
     }
 
@@ -2639,7 +2660,7 @@ function kioskHtml(): string {
       width: 140px;
       height: 140px;
       border-radius: 999px;
-      background: radial-gradient(circle, rgba(48, 209, 88, .34) 0 52%, rgba(36, 138, 61, .18) 72%, rgba(36, 138, 61, .04) 86%, transparent 92%);
+      background: radial-gradient(circle, rgba(48, 209, 88, .3) 0 64%, rgba(36, 138, 61, .2) 80%, rgba(36, 138, 61, .07) 91%, transparent 98%);
       will-change: transform, opacity;
     }
 
@@ -2662,17 +2683,16 @@ function kioskHtml(): string {
       position: absolute;
       left: 0;
       top: 0;
-      width: 120px;
-      height: 120px;
+      width: 150px;
+      height: 150px;
       border-radius: 999px;
-      border: 2px solid rgba(48, 209, 88, .42);
-      box-shadow: 0 0 0 8px rgba(48, 209, 88, .07);
+      background: radial-gradient(circle, transparent 0 50%, rgba(48, 209, 88, .2) 64%, rgba(48, 209, 88, .07) 78%, transparent 90%);
+      filter: blur(3px);
       will-change: transform, opacity;
     }
 
     .success-ring.is-departure {
-      border-color: rgba(120, 110, 240, .4);
-      box-shadow: 0 0 0 8px rgba(120, 110, 240, .07);
+      background: radial-gradient(circle, transparent 0 50%, rgba(120, 110, 240, .2) 64%, rgba(120, 110, 240, .07) 78%, transparent 90%);
     }
 
     .burst-piece {
@@ -2721,6 +2741,14 @@ function kioskHtml(): string {
     body[data-morph="dot"] .motion-orb-field {
       transform: scale(.9);
       filter: saturate(120%) brightness(1.02);
+    }
+
+    /* Drift, shape and mesh run as separate animations on unrelated periods, so the
+       combined motion never lands back on the same pose the way one loop would. */
+    .motion-orb-drift {
+      position: absolute;
+      inset: 0;
+      will-change: transform;
     }
 
     .motion-orb {
@@ -3096,8 +3124,8 @@ function kioskHtml(): string {
 
   <div class="motion-background" aria-hidden="true">
     <div class="motion-orb-field">
-      <div class="motion-orb motion-orb-primary"></div>
-      <div class="motion-orb motion-orb-secondary"></div>
+      <div class="motion-orb-drift" data-drift="primary"><div class="motion-orb motion-orb-primary"></div></div>
+      <div class="motion-orb-drift" data-drift="secondary"><div class="motion-orb motion-orb-secondary"></div></div>
     </div>
   </div>
   <div class="fx-layer fx-back" id="fx-back" aria-hidden="true"></div>
@@ -3233,20 +3261,67 @@ function kioskHtml(): string {
     const motionAnimations = [];
     let motionRampFrame = null;
 
-    const primaryMotionFrames = [
-      { offset: 0, transform: 'translate3d(-18px, -8px, 0) scale(.92) rotate(-4deg)', backgroundPosition: '8% 18%, 86% 12%, 32% 90%, 88% 78%, 50% 50%, 50% 50%' },
-      { offset: .25, transform: 'translate3d(54px, 40px, 0) scale(1.08) rotate(6deg)', backgroundPosition: '68% 24%, 20% 2%, 84% 44%, 12% 20%, 22% 82%, 46% 42%' },
-      { offset: .5, transform: 'translate3d(86px, 12px, 0) scale(1.02) rotate(10deg)', backgroundPosition: '100% 72%, 0% 52%, 44% 0%, 76% 30%, 82% 28%, 42% 54%' },
-      { offset: .75, transform: 'translate3d(34px, 70px, 0) scale(.96) rotate(1deg)', backgroundPosition: '30% 100%, 72% 76%, 0% 58%, 22% 92%, 12% 12%, 54% 46%' },
-      { offset: 1, transform: 'translate3d(-18px, -8px, 0) scale(.92) rotate(-4deg)', backgroundPosition: '8% 18%, 86% 12%, 32% 90%, 88% 78%, 50% 50%, 50% 50%' },
+    // Closed Catmull-Rom loops sampled into dense keyframes. Interpolating between a handful of
+    // waypoints is what made the old motion feel rigid: the path was a polygon and every corner
+    // was a direction snap. Splining it gives continuous curvature with no visible waypoints.
+    function smoothLoop(points, perSegment, format) {
+      const frames = [];
+      const count = points.length;
+      for (let i = 0; i < count; i += 1) {
+        const p0 = points[(i - 1 + count) % count];
+        const p1 = points[i];
+        const p2 = points[(i + 1) % count];
+        const p3 = points[(i + 2) % count];
+        for (let step = 0; step < perSegment; step += 1) {
+          const t = step / perSegment;
+          const t2 = t * t;
+          const t3 = t2 * t;
+          const a = .5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t
+            + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2
+            + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3);
+          const b = .5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t
+            + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2
+            + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3);
+          frames.push({ transform: format(a, b) });
+        }
+      }
+      frames.push(frames[0]);
+      return frames;
+    }
+
+    const driftFormat = (x, y) => 'translate3d(' + x.toFixed(2) + 'px, ' + y.toFixed(2) + 'px, 0)';
+    const shapeFormat = (scale, angle) => 'scale(' + scale.toFixed(4) + ') rotate(' + angle.toFixed(2) + 'deg)';
+
+    const primaryDriftFrames = smoothLoop([
+      [-22, -12], [18, 26], [58, 10], [88, 44], [70, 84], [22, 76], [-16, 54], [-44, 18],
+    ], 8, driftFormat);
+
+    const secondaryDriftFrames = smoothLoop([
+      [26, 64], [-10, 50], [-48, 18], [-76, -20], [-58, -58], [-18, -48], [20, -12], [46, 28],
+    ], 8, driftFormat);
+
+    const primaryShapeFrames = smoothLoop([
+      [.94, -4], [1.07, 4], [1.01, 9], [.97, 2],
+    ], 10, shapeFormat);
+
+    const secondaryShapeFrames = smoothLoop([
+      [1.04, 6], [.95, -2], [1.02, -8], [1.07, 1],
+    ], 10, shapeFormat);
+
+    const primaryMeshFrames = [
+      { backgroundPosition: '8% 18%, 86% 12%, 32% 90%, 88% 78%, 50% 50%, 50% 50%' },
+      { backgroundPosition: '68% 24%, 20% 2%, 84% 44%, 12% 20%, 22% 82%, 46% 42%' },
+      { backgroundPosition: '100% 72%, 0% 52%, 44% 0%, 76% 30%, 82% 28%, 42% 54%' },
+      { backgroundPosition: '30% 100%, 72% 76%, 0% 58%, 22% 92%, 12% 12%, 54% 46%' },
+      { backgroundPosition: '8% 18%, 86% 12%, 32% 90%, 88% 78%, 50% 50%, 50% 50%' },
     ];
 
-    const secondaryMotionFrames = [
-      { offset: 0, transform: 'translate3d(24px, 70px, 0) scale(.94) rotate(5deg)', backgroundPosition: '100% 74%, 10% 0%, 92% 40%, 20% 100%, 50% 50%, 50% 50%' },
-      { offset: .25, transform: 'translate3d(-42px, 12px, 0) scale(1.04) rotate(-3deg)', backgroundPosition: '32% 14%, 78% 44%, 0% 88%, 72% 28%, 82% 22%, 44% 48%' },
-      { offset: .5, transform: 'translate3d(-78px, -42px, 0) scale(1.08) rotate(-8deg)', backgroundPosition: '0% 62%, 100% 100%, 48% 0%, 100% 65%, 20% 80%, 58% 48%' },
-      { offset: .75, transform: 'translate3d(-16px, 40px, 0) scale(.96) rotate(6deg)', backgroundPosition: '76% 100%, 18% 68%, 70% 22%, 8% 42%, 90% 10%, 52% 54%' },
-      { offset: 1, transform: 'translate3d(24px, 70px, 0) scale(.94) rotate(5deg)', backgroundPosition: '100% 74%, 10% 0%, 92% 40%, 20% 100%, 50% 50%, 50% 50%' },
+    const secondaryMeshFrames = [
+      { backgroundPosition: '100% 74%, 10% 0%, 92% 40%, 20% 100%, 50% 50%, 50% 50%' },
+      { backgroundPosition: '32% 14%, 78% 44%, 0% 88%, 72% 28%, 82% 22%, 44% 48%' },
+      { backgroundPosition: '0% 62%, 100% 100%, 48% 0%, 100% 65%, 20% 80%, 58% 48%' },
+      { backgroundPosition: '76% 100%, 18% 68%, 70% 22%, 8% 42%, 90% 10%, 52% 54%' },
+      { backgroundPosition: '100% 74%, 10% 0%, 92% 40%, 20% 100%, 50% 50%, 50% 50%' },
     ];
 
     const fxFront = document.getElementById('fx-front');
@@ -3254,7 +3329,7 @@ function kioskHtml(): string {
     const scannerHint = document.querySelector('.barcode-scanner-hint');
     const scanStatus = document.getElementById('scan-status');
 
-    const SCAN_FLIGHT_MS = 240;
+    const SCAN_FLIGHT_MS = 280;
     let scanBeatUntil = 0;
     const BURST_COLORS = ['#0a84ff', '#5e5ce6', '#af52de', '#30d158', '#64d2ff'];
     const BURST_SHAPES = ['', 'is-sparkle', 'is-diamond'];
@@ -3320,7 +3395,7 @@ function kioskHtml(): string {
       };
 
       const steps = 16;
-      const halfLength = 44;
+      const halfLength = 66;
       const frames = [];
       for (let i = 0; i <= steps; i += 1) {
         const t = i / steps;
@@ -3336,7 +3411,7 @@ function kioskHtml(): string {
         frames.push({
           offset: t,
           opacity: t < .06 ? 0 : (t > .9 ? 0 : 1),
-          transform: 'translate(' + (centerX - halfLength).toFixed(1) + 'px, ' + (centerY - 3.5).toFixed(1) + 'px)'
+          transform: 'translate(' + (centerX - halfLength).toFixed(1) + 'px, ' + (centerY - 5.5).toFixed(1) + 'px)'
             + ' rotate(' + (angle * 180 / Math.PI).toFixed(1) + 'deg)'
             + ' scaleX(' + stretch.toFixed(3) + ')',
         });
@@ -3344,6 +3419,25 @@ function kioskHtml(): string {
 
       runFx(streak, frames, { duration: duration, easing: settings.easing || 'cubic-bezier(.32,.02,.2,1)', fill: 'forwards' });
       return duration;
+    }
+
+    // Sized from the real hint-to-card distance so the ring is exactly crossing the card at
+    // the arrival beat, then keeps going and fades. This is the corner sweep, done properly.
+    function sweepWavefront(from, to, arriveMs, totalMs) {
+      const ring = spawnFx('scan-wavefront');
+      if (!ring) return;
+      ring.style.left = (from.x - 60) + 'px';
+      ring.style.top = (from.y - 60) + 'px';
+      const reach = Math.max(160, Math.hypot(to.x - from.x, to.y - from.y));
+      const arriveScale = reach / 60;
+      const endScale = arriveScale * 1.5;
+      const arriveAt = Math.min(.85, arriveMs / totalMs);
+      runFx(ring, [
+        { offset: 0, transform: 'scale(.16)', opacity: 0 },
+        { offset: .14, transform: 'scale(' + (arriveScale * .22).toFixed(2) + ')', opacity: 1 },
+        { offset: arriveAt, transform: 'scale(' + arriveScale.toFixed(2) + ')', opacity: .7 },
+        { offset: 1, transform: 'scale(' + endScale.toFixed(2) + ')', opacity: 0 },
+      ], { duration: totalMs, easing: 'cubic-bezier(.22,.72,.28,1)', fill: 'forwards' });
     }
 
     function pulseRipple(point) {
@@ -3380,12 +3474,16 @@ function kioskHtml(): string {
         Math.max(origin.x, window.innerWidth - origin.x),
         Math.max(origin.y, window.innerHeight - origin.y)
       );
-      const scale = Math.max(2, (reach * 2.2) / 140);
+      // Cover the viewport first, then fade as a flat wash. If it is still growing while it
+      // fades, the success background matches its interior and only the edge stays visible,
+      // which is what read as an expanding eclipse ring.
+      const scale = Math.max(2, (reach * 2.7) / 140);
       runFx(wave, [
-        { transform: 'scale(.16)', opacity: 0 },
-        { transform: 'scale(' + (scale * .34).toFixed(2) + ')', opacity: 1, offset: .3 },
-        { transform: 'scale(' + scale.toFixed(2) + ')', opacity: 0 },
-      ], { duration: 640, easing: 'cubic-bezier(.22,.7,.28,1)', fill: 'forwards' });
+        { offset: 0, transform: 'scale(.16)', opacity: 0 },
+        { offset: .16, transform: 'scale(' + (scale * .34).toFixed(2) + ')', opacity: 1 },
+        { offset: .5, transform: 'scale(' + scale.toFixed(2) + ')', opacity: 1 },
+        { offset: 1, transform: 'scale(' + (scale * 1.05).toFixed(2) + ')', opacity: 0 },
+      ], { duration: 680, easing: 'cubic-bezier(.22,.7,.28,1)', fill: 'forwards' });
     }
 
     // Restrained burst: a dozen small marks, one ring, one background bloom. No confetti.
@@ -3396,11 +3494,11 @@ function kioskHtml(): string {
 
       const ring = spawnFx('success-ring' + (departure ? ' is-departure' : ''));
       if (ring) {
-        ring.style.left = (origin.x - 60) + 'px';
-        ring.style.top = (origin.y - 60) + 'px';
+        ring.style.left = (origin.x - 75) + 'px';
+        ring.style.top = (origin.y - 75) + 'px';
         runFx(ring, [
-          { transform: 'scale(.5)', opacity: .8 },
-          { transform: 'scale(2.5)', opacity: 0 },
+          { transform: 'scale(.55)', opacity: .9 },
+          { transform: 'scale(2.2)', opacity: 0 },
         ], { duration: departure ? 620 : 560, easing: 'cubic-bezier(.16,.82,.28,1)', fill: 'forwards' });
       }
 
@@ -3554,25 +3652,29 @@ function kioskHtml(): string {
       motionRampFrame = requestAnimationFrame(tick);
     }
 
+    function addMotionLayer(element, frames, duration, easing, seed, welcomeRate) {
+      if (!element || typeof element.animate !== 'function') return;
+      const animation = element.animate(frames, { duration: duration, easing: easing, iterations: Infinity });
+      animation.currentTime = seed;
+      motionAnimations.push({ animation: animation, welcomeRate: welcomeRate });
+    }
+
     function initMotion() {
       if (!motionPrimary || !motionSecondary || typeof motionPrimary.animate !== 'function' || reducedMotionQuery?.matches) return;
 
-      const primaryAnimation = motionPrimary.animate(primaryMotionFrames, {
-        duration: 26000,
-        easing: 'ease-in-out',
-        iterations: Infinity,
-      });
-      const secondaryAnimation = motionSecondary.animate(secondaryMotionFrames, {
-        duration: 32000,
-        easing: 'ease-in-out',
-        iterations: Infinity,
-      });
-      primaryAnimation.currentTime = 2250;
-      secondaryAnimation.currentTime = 4500;
-      motionAnimations.push(
-        { animation: primaryAnimation, welcomeRate: 26000 / 3800 },
-        { animation: secondaryAnimation, welcomeRate: 32000 / 5200 },
-      );
+      const primaryDrift = document.querySelector('.motion-orb-drift[data-drift="primary"]');
+      const secondaryDrift = document.querySelector('.motion-orb-drift[data-drift="secondary"]');
+
+      // Durations are scaled to the new path lengths so the orbs travel at the speed they
+      // always did; only the shape of the path changed. Drift, breathing and mesh then run on
+      // deliberately unrelated periods so they never come back into phase.
+      addMotionLayer(primaryDrift, primaryDriftFrames, 32500, 'linear', 9000, 26000 / 3800);
+      addMotionLayer(secondaryDrift, secondaryDriftFrames, 39500, 'linear', 21000, 32000 / 5200);
+      addMotionLayer(motionPrimary, primaryShapeFrames, 50000, 'linear', 7000, 26000 / 3800);
+      addMotionLayer(motionSecondary, secondaryShapeFrames, 61000, 'linear', 15000, 32000 / 5200);
+      addMotionLayer(motionPrimary, primaryMeshFrames, 78000, 'ease-in-out', 11000, 26000 / 3800);
+      addMotionLayer(motionSecondary, secondaryMeshFrames, 95000, 'ease-in-out', 29000, 32000 / 5200);
+
       updateMotionSpeed(true);
     }
 
@@ -3679,8 +3781,10 @@ function kioskHtml(): string {
         fxFront.classList.add('is-active');
       }
 
+      const origin = scannerOrigin();
       const target = stageCenter();
-      const flight = flyLightTrail(scannerOrigin(), target, { duration: SCAN_FLIGHT_MS, bow: .2 });
+      const flight = flyLightTrail(origin, target, { duration: SCAN_FLIGHT_MS, bow: .2 });
+      sweepWavefront(origin, target, flight, 460);
       scanBeatUntil = performance.now() + flight + 130;
 
       setTimeout(() => { delete document.body.dataset.scanLaunch; }, 320);
