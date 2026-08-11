@@ -2388,7 +2388,84 @@ function kioskHtml(): string {
         --blob-alpha 840ms var(--motion-smooth);
     }
 
+
+    .scan-sweep {
+      position: fixed;
+      inset: 0;
+      z-index: 4;
+      pointer-events: none;
+      overflow: hidden;
+      opacity: 0;
+    }
+
+    .scan-sweep::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 100% 100%, rgba(255, 255, 255, .92) 0 1.4%, transparent 9%),
+        linear-gradient(135deg, transparent 42%, rgba(0, 122, 255, .26) 49%, transparent 56%);
+      clip-path: circle(0% at 100% 100%);
+      mix-blend-mode: screen;
+    }
+
+    .scan-sweep::after {
+      content: "";
+      position: absolute;
+      right: clamp(18px, 2vw, 40px);
+      bottom: clamp(18px, 2vw, 40px);
+      width: clamp(72px, 10vw, 180px);
+      aspect-ratio: 1;
+      border: clamp(3px, .35vw, 7px) solid #007aff;
+      border-radius: 50%;
+      box-shadow: 0 0 0 10px rgba(0, 122, 255, .16), 0 0 44px rgba(0, 122, 255, .58);
+      transform: scale(.18);
+      transform-origin: center;
+    }
+
+    .scan-sweep.is-active {
+      animation: kioskScanSweepFade 1100ms ease-out both;
+    }
+
+    .scan-sweep.is-active::before {
+      animation: kioskScanSweepExpand 950ms cubic-bezier(.16, .82, .24, 1) both;
+    }
+
+    .scan-sweep.is-active::after {
+      animation: kioskScanSweepRing 850ms cubic-bezier(.18, .78, .24, 1) both;
+    }
+
+    @keyframes kioskScanSweepExpand {
+      0% {
+        clip-path: circle(0% at 100% 100%);
+        opacity: 0;
+      }
+      12% { opacity: 1; }
+      100% {
+        clip-path: circle(155% at 100% 100%);
+        opacity: 0;
+      }
+    }
+
+    @keyframes kioskScanSweepRing {
+      0% {
+        opacity: 0;
+        transform: scale(.18);
+      }
+      16% { opacity: 1; }
+      100% {
+        opacity: 0;
+        transform: scale(7.5);
+      }
+    }
+
+    @keyframes kioskScanSweepFade {
+      0%, 82% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+
     .motion-background {
+
       position: fixed;
       inset: 0;
       z-index: 0;
@@ -2765,10 +2842,13 @@ function kioskHtml(): string {
   </style>
 </head>
 <body data-step="idle" data-tone="idle">
+
   <div class="motion-background" aria-hidden="true">
     <div class="motion-orb motion-orb-primary"></div>
     <div class="motion-orb motion-orb-secondary"></div>
   </div>
+  <div class="scan-sweep" id="scan-sweep" aria-hidden="true"></div>
+
   <div class="shell">
     <header class="topbar">
       <div class="brand"><span>Ninety Six High School Library</span></div>
@@ -2889,6 +2969,7 @@ function kioskHtml(): string {
     const recentClearContinue = document.getElementById('recent-clear-continue');
     const recentClearCancel = document.getElementById('recent-clear-cancel');
     const screenContent = document.querySelector('.screen-content');
+
     const motionPrimary = document.querySelector('.motion-orb-primary');
     const motionSecondary = document.querySelector('.motion-orb-secondary');
     const reducedMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
@@ -2910,6 +2991,9 @@ function kioskHtml(): string {
       { offset: .75, transform: 'translate3d(-16px, 40px, 0) scale(.96) rotate(6deg)', backgroundPosition: '76% 100%, 18% 68%, 70% 22%, 8% 42%, 90% 10%, 52% 54%' },
       { offset: 1, transform: 'translate3d(24px, 70px, 0) scale(.94) rotate(5deg)', backgroundPosition: '100% 74%, 10% 0%, 92% 40%, 20% 100%, 50% 50%, 50% 50%' },
     ];
+
+    const scanSweep = document.getElementById('scan-sweep');
+
 
     let currentBarcode = '';
     let currentFirstName = '';
@@ -3108,6 +3192,11 @@ function kioskHtml(): string {
       delete document.body.dataset.scanFlash;
       void document.body.offsetWidth;
       document.body.dataset.scanFlash = 'true';
+      if (scanSweep) {
+        scanSweep.classList.remove('is-active');
+        void scanSweep.offsetWidth;
+        scanSweep.classList.add('is-active');
+      }
       setTimeout(() => {
         if (document.body.dataset.scanFlash === 'true') delete document.body.dataset.scanFlash;
       }, 340);
