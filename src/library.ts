@@ -247,8 +247,11 @@ async function handleScan(request: Request, env: LibraryEnv): Promise<Response> 
     return json({ mode: "new_student", barcode, grades: GRADE_OPTIONS, reasons: REASONS, state: await getCurrentState(env, false) });
   }
 
-  const activeVisit = await findActiveVisitForStudent(env, student.id);
-  const state = await getCurrentState(env, false);
+  const [activeVisit, state, funFacts] = await Promise.all([
+    findActiveVisitForStudent(env, student.id),
+    getCurrentState(env, false),
+    getStudentFunFacts(env, student.id),
+  ]);
 
   if (activeVisit) {
     return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(activeVisit), state });
@@ -257,7 +260,7 @@ async function handleScan(request: Request, env: LibraryEnv): Promise<Response> 
   return json({
     mode: "checkin",
     student: publicStudent(student),
-    funFacts: await getStudentFunFacts(env, student.id),
+    funFacts,
     reasons: REASONS,
     state,
   });
@@ -1371,18 +1374,11 @@ function kioskHtml(): string {
       text-align: center;
       transform-origin: center;
       will-change: opacity, transform, filter;
-      transition: opacity 220ms var(--motion-smooth), transform 420ms var(--motion-ease), filter 420ms var(--motion-ease);
-    }
-
-    .screen-content.is-leaving {
-      opacity: 0;
-      transform: translateY(12px) scale(.985);
-      filter: blur(3px);
-      pointer-events: none;
+      transition: opacity 160ms var(--motion-smooth), transform 280ms var(--motion-ease), filter 280ms var(--motion-ease);
     }
 
     .screen-content.is-entering {
-      animation: screenContentEnter 500ms var(--motion-ease) both;
+      animation: screenContentEnter 320ms var(--motion-ease) both;
     }
 
     @keyframes screenContentEnter {
@@ -2629,7 +2625,6 @@ function kioskHtml(): string {
     let workingTimer = null;
     let reasonTimer = null;
     let connectivityTimer = null;
-    let copyTransitionTimer = null;
     let busy = false;
     let checkingConnection = false;
 
@@ -2679,8 +2674,6 @@ function kioskHtml(): string {
       clearTimeout(workingTimer);
       clearTimeout(reasonTimer);
       clearTimeout(connectivityTimer);
-      clearTimeout(copyTransitionTimer);
-      copyTransitionTimer = null;
     }
 
     function sleep(ms) {
@@ -2735,16 +2728,10 @@ function kioskHtml(): string {
         return;
       }
 
-      clearTimeout(copyTransitionTimer);
       screenContent.classList.remove('is-entering');
-      screenContent.classList.add('is-leaving');
-      copyTransitionTimer = window.setTimeout(() => {
-        applyCopy(next);
-        screenContent.classList.remove('is-leaving');
-        void screenContent.offsetWidth;
-        screenContent.classList.add('is-entering');
-        copyTransitionTimer = null;
-      }, 120);
+      applyCopy(next);
+      void screenContent.offsetWidth;
+      screenContent.classList.add('is-entering');
     }
 
     function showIdle() {
