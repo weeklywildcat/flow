@@ -1308,7 +1308,7 @@ function kioskHtml(): string {
       width: clamp(26px, 2.8vw, 36px);
       margin-left: .18em;
       vertical-align: middle;
-      animation: barcodeArrowNudge 3.6s ease-in-out infinite;
+      animation: barcodeArrowNudge 1.25s ease-in-out infinite alternate;
       transform-origin: left center;
     }
 
@@ -1320,11 +1320,8 @@ function kioskHtml(): string {
     }
 
     @keyframes barcodeArrowNudge {
-      0%, 68%, 100% { transform: translateX(0); }
-      73% { transform: translateX(4px); }
-      78% { transform: translateX(0); }
-      83% { transform: translateX(3px); }
-      88% { transform: translateX(0); }
+      from { transform: translateX(0); }
+      to { transform: translateX(5px); }
     }
 
     .screen {
