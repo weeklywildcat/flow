@@ -46,6 +46,11 @@ type VisitRow = {
 
 type CountRow = { count: number };
 
+type StudentFunFactRow = {
+  visits_this_month: number | null;
+  minutes_this_year: number | null;
+};
+
 type SheetEventPayload = {
   event: string;
   timestamp: string;
@@ -249,7 +254,13 @@ async function handleScan(request: Request, env: LibraryEnv): Promise<Response> 
     return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(activeVisit), state });
   }
 
-  return json({ mode: "checkin", student: publicStudent(student), reasons: REASONS, state });
+  return json({
+    mode: "checkin",
+    student: publicStudent(student),
+    funFacts: await getStudentFunFacts(env, student.id),
+    reasons: REASONS,
+    state,
+  });
 }
 
 async function handleCheckin(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
@@ -730,6 +741,31 @@ async function findActiveVisitForStudent(env: LibraryEnv, studentRowId: number):
     `${visitSelectSql()} WHERE v.student_row_id = ? AND v.checked_out_at IS NULL ORDER BY v.checked_in_at DESC LIMIT 1`
   ).bind(studentRowId).first<VisitRow>();
   return row ?? null;
+}
+
+async function getStudentFunFacts(env: LibraryEnv, studentRowId: number): Promise<{
+  visitsThisMonth: number;
+  minutesThisYear: number;
+}> {
+  const today = dateInTimezone(new Date());
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const yearStart = `${today.slice(0, 4)}-01-01`;
+  const row = await env.SIGNAGE_DB.prepare(
+    `SELECT
+       SUM(CASE WHEN checked_in_at >= ? THEN 1 ELSE 0 END) AS visits_this_month,
+       COALESCE(SUM(
+         CASE WHEN checked_out_at IS NULL THEN 0
+         ELSE ROUND((julianday(checked_out_at) - julianday(checked_in_at)) * 24 * 60)
+         END
+       ), 0) AS minutes_this_year
+     FROM library_visits
+     WHERE student_row_id = ? AND checked_in_at >= ?`
+  ).bind(localDateStartIso(monthStart), studentRowId, localDateStartIso(yearStart)).first<StudentFunFactRow>();
+
+  return {
+    visitsThisMonth: Math.max(0, Number(row?.visits_this_month ?? 0)),
+    minutesThisYear: Math.max(0, Number(row?.minutes_this_year ?? 0)),
+  };
 }
 
 async function getVisitById(env: LibraryEnv, visitId: number): Promise<VisitRow | null> {
@@ -1741,6 +1777,61 @@ function kioskHtml(): string {
       gap: clamp(10px, 1.65vh, 14px);
     }
 
+    .library-fun-fact {
+      display: none;
+      width: min(720px, 100%);
+      margin-top: clamp(14px, 2.2vh, 22px);
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      color: var(--muted);
+      text-align: left;
+    }
+
+    body[data-step="reasons"] .library-fun-fact {
+      display: flex;
+      animation: funFactIn 440ms var(--motion-ease) 220ms both;
+    }
+
+    .fun-fact-icon {
+      width: 30px;
+      height: 30px;
+      flex: 0 0 auto;
+      color: #ff9f0a;
+      filter: drop-shadow(0 5px 10px rgba(255, 159, 10, .2));
+    }
+
+    .fun-fact-icon svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .fun-fact-copy {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .fun-fact-label {
+      color: var(--ink);
+      font-size: clamp(14px, 1.45vw, 18px);
+      line-height: 1.05;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    .fun-fact-text {
+      font-size: clamp(13px, 1.35vw, 17px);
+      line-height: 1.2;
+      font-weight: 450;
+    }
+
+    @keyframes funFactIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
     body[data-step="reasons"] .scan-status,
     body[data-step="new-student"] .scan-status,
     body[data-step="pairing"] .scan-status {
@@ -2019,6 +2110,7 @@ function kioskHtml(): string {
       .stage { padding-left: 16px; padding-right: 16px; }
       .brand { font-size: 15px; }
       .reason-grid { grid-template-columns: 1fr; width: min(420px, 100%); }
+      .library-fun-fact { width: min(420px, 100%); }
       .reason { min-height: 50px; }
       .reason span { font-size: 21px; }
       .student-form-grid { grid-template-columns: 1fr; }
@@ -2452,6 +2544,19 @@ function kioskHtml(): string {
           </div>
 
           <div class="reason-grid" id="reasons">${reasons}</div>
+          <div class="library-fun-fact" id="library-fun-fact" aria-live="polite">
+            <span class="fun-fact-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 18h6" stroke-width="1.8"/><path d="M10 21h4" stroke-width="1.8"/>
+                <path d="M8.6 14.8a6 6 0 1 1 6.8 0c-.9.7-1.4 1.5-1.4 2.2H10c0-.7-.5-1.5-1.4-2.2Z" stroke-width="1.8"/>
+                <path d="M12 2v1.2M4.9 4.9l.85.85M2 12h1.2M19.1 4.9l-.85.85M22 12h-1.2" stroke-width="1.6"/>
+              </svg>
+            </span>
+            <span class="fun-fact-copy">
+              <span class="fun-fact-label">Fun fact</span>
+              <span class="fun-fact-text" id="fun-fact-text">You’ve visited the library 0 times this month and spent 0 minutes here this year.</span>
+            </span>
+          </div>
           <form class="student-form" id="student-form">
             <div class="student-form-grid">
               <div class="student-form-field">
@@ -2513,6 +2618,7 @@ function kioskHtml(): string {
     const newFirstName = document.getElementById('new-first-name');
     const newLastName = document.getElementById('new-last-name');
     const newGrade = document.getElementById('new-grade');
+    const funFactText = document.getElementById('fun-fact-text');
     const screenContent = document.querySelector('.screen-content');
 
     let currentBarcode = '';
@@ -2592,6 +2698,15 @@ function kioskHtml(): string {
       const grid = document.getElementById('reasons');
       if (grid) grid.dataset.selecting = 'true';
       button.classList.add('selected');
+    }
+
+    function updateFunFact(funFacts) {
+      if (!funFactText) return;
+      const visits = Math.max(0, Math.round(Number(funFacts && funFacts.visitsThisMonth) || 0));
+      const minutes = Math.max(0, Math.round(Number(funFacts && funFacts.minutesThisYear) || 0));
+      const visitLabel = visits === 1 ? 'time' : 'times';
+      const minuteLabel = minutes === 1 ? 'minute' : 'minutes';
+      funFactText.textContent = 'You’ve visited the library ' + visits + ' ' + visitLabel + ' this month and spent ' + minutes + ' ' + minuteLabel + ' here this year.';
     }
 
     function flashScanAccepted() {
@@ -2806,11 +2921,12 @@ function kioskHtml(): string {
       requestAnimationFrame(() => newFirstName && newFirstName.focus({ preventScroll: true }));
     }
 
-    function showReasons(student) {
+    function showReasons(student, funFacts) {
       clearTimeout(workingTimer);
       busy = false;
       resetReasonButtons();
       currentFirstName = student && student.firstName ? student.firstName : 'there';
+      updateFunFact(funFacts);
       setStep('reasons');
       setTone('idle');
       setCopy({
@@ -2862,7 +2978,7 @@ function kioskHtml(): string {
         }
 
         if (data.mode === 'checkin') {
-          showReasons(data.student);
+          showReasons(data.student, data.funFacts);
           return;
         }
 
