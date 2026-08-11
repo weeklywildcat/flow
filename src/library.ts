@@ -2356,6 +2356,7 @@ function kioskHtml(): string {
       --motion-standard: 420ms;
       --orb-duration-primary: 26s;
       --orb-duration-secondary: 32s;
+      --orb-opacity: .86;
     }
 
     body {
@@ -2378,14 +2379,15 @@ function kioskHtml(): string {
       height: clamp(340px, 52vw, 760px);
       pointer-events: none;
       filter: blur(10px);
-      opacity: .86;
+      opacity: var(--orb-opacity);
       will-change: transform;
     }
 
     /* Keep the welcome screen lively, then let the background recede during interaction. */
     body[data-step="idle"][data-tone="idle"] {
-      --orb-duration-primary: 5.4s;
-      --orb-duration-secondary: 7.2s;
+      --orb-duration-primary: 3.8s;
+      --orb-duration-secondary: 5.2s;
+      --orb-opacity: .96;
     }
 
     body::before {
