@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS library_students (
   updated_at TEXT NOT NULL
 );
 
+-- Archived visits stay in this table but are excluded from history, stats, exports and the
+-- live occupancy count. Existing databases pick the columns up automatically on first request;
+-- see ensureVisitArchiveColumns in src/library.ts.
 CREATE TABLE IF NOT EXISTS library_visits (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   student_row_id INTEGER NOT NULL,
@@ -21,6 +24,8 @@ CREATE TABLE IF NOT EXISTS library_visits (
   checked_out_at TEXT,
   checkout_method TEXT,
   checked_out_by TEXT,
+  archived_at TEXT,
+  archived_by TEXT,
   FOREIGN KEY (student_row_id) REFERENCES library_students(id)
 );
 
@@ -29,6 +34,9 @@ CREATE INDEX IF NOT EXISTS idx_library_visits_active
 
 CREATE INDEX IF NOT EXISTS idx_library_visits_student_active
   ON library_visits(student_row_id, checked_out_at);
+
+CREATE INDEX IF NOT EXISTS idx_library_visits_archived
+  ON library_visits(archived_at, checked_in_at);
 
 CREATE TABLE IF NOT EXISTS library_sheet_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

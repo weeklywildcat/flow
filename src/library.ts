@@ -138,6 +138,7 @@ export default {
 
     try {
       if (pathname.startsWith("/api/library/")) {
+        await ensureVisitArchiveColumns(env);
         const kioskAllowed = pathname === "/api/library/scan" || pathname === "/api/library/checkin" || pathname === "/api/library/checkout" || pathname === "/api/library/create-student" || pathname === "/api/library/student-fun-facts" || pathname === "/api/library/kiosk-status";
         const pairingAllowed = pathname === "/api/library/kiosk-enroll";
         const authorized = pairingAllowed || (kioskAllowed ? await isKioskOrStaffAuthorized(request, env) : isStaffAuthorized(request));
@@ -390,7 +391,7 @@ async function handleClear(request: Request, env: LibraryEnv, ctx: ExecutionCont
   await env.SIGNAGE_DB.prepare(
     `UPDATE library_visits
      SET checked_out_at = ?, checkout_method = ?, checked_out_by = ?
-     WHERE checked_out_at IS NULL`
+     WHERE checked_out_at IS NULL AND archived_at IS NULL`
   ).bind(now, method, actor).run();
 
   for (const visit of active) {
@@ -794,7 +795,7 @@ async function findStudentAndActiveVisit(env: LibraryEnv, barcode: string): Prom
        v.checked_out_by AS visit_checked_out_by
      FROM library_students s
      LEFT JOIN library_visits v
-       ON v.student_row_id = s.id AND v.checked_out_at IS NULL
+       ON v.student_row_id = s.id AND v.checked_out_at IS NULL AND v.archived_at IS NULL
      WHERE s.barcode = ? AND s.active = 1
      ORDER BY v.checked_in_at DESC
      LIMIT 1`
@@ -856,7 +857,7 @@ async function getStudentFunFacts(env: LibraryEnv, studentRowId: number): Promis
          END
        ), 0) AS minutes_this_year
      FROM library_visits
-     WHERE student_row_id = ? AND checked_in_at >= ?`
+     WHERE student_row_id = ? AND checked_in_at >= ? AND archived_at IS NULL`
   ).bind(localDateStartIso(monthStart), studentRowId, localDateStartIso(yearStart)).first<StudentFunFactRow>();
 
   return {
@@ -872,6 +873,7 @@ async function hasRecentDashboardClear(env: LibraryEnv, studentRowId: number): P
      FROM library_visits
      WHERE student_row_id = ?
        AND checked_out_at >= ?
+       AND archived_at IS NULL
        AND checkout_method IN ('librarian', 'clear_all')
      ORDER BY checked_out_at DESC
      LIMIT 1`
@@ -891,6 +893,8 @@ async function getActiveVisits(env: LibraryEnv): Promise<VisitRow[]> {
   return result.results;
 }
 
+// The archived filter lives in the JOIN so every caller inherits it: CSV export, the live
+// occupancy list, single-visit lookups and the kiosk's open-visit check.
 function visitSelectSql(): string {
   return `SELECT
       v.id,
@@ -905,7 +909,7 @@ function visitSelectSql(): string {
       v.checkout_method,
       v.checked_out_by
     FROM library_visits v
-    JOIN library_students s ON s.id = v.student_row_id`;
+    JOIN library_students s ON s.id = v.student_row_id AND v.archived_at IS NULL`;
 }
 
 async function checkoutVisit(env: LibraryEnv, visitId: number, method: CheckoutMethod, actor: string, checkedOutAt: string): Promise<boolean> {
@@ -954,7 +958,7 @@ async function getCurrentState(env: LibraryEnv, includeStudents: boolean) {
 
 async function getActiveCount(env: LibraryEnv): Promise<number> {
   const row = await env.SIGNAGE_DB.prepare(
-    "SELECT COUNT(*) AS count FROM library_visits WHERE checked_out_at IS NULL"
+    "SELECT COUNT(*) AS count FROM library_visits WHERE checked_out_at IS NULL AND archived_at IS NULL"
   ).first<CountRow>();
   return row?.count ?? 0;
 }
@@ -1160,6 +1164,41 @@ function csvCell(value: unknown): string {
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+// library_visits predates archiving, so CREATE TABLE IF NOT EXISTS cannot add the columns to a
+// database that already has the table. Run the ALTERs once per isolate, before anything reads
+// or writes archived_at. A fresh database is left alone: the table is created with the columns.
+let visitArchiveMigration: Promise<void> | null = null;
+
+export function ensureVisitArchiveColumns(env: LibraryEnv): Promise<void> {
+  if (!visitArchiveMigration) {
+    visitArchiveMigration = migrateVisitArchiveColumns(env).catch((error) => {
+      visitArchiveMigration = null;
+      throw error;
+    });
+  }
+  return visitArchiveMigration;
+}
+
+async function migrateVisitArchiveColumns(env: LibraryEnv): Promise<void> {
+  const columns = await env.SIGNAGE_DB.prepare("PRAGMA table_info(library_visits)").all<{ name: string }>();
+  if (columns.results.length === 0) return;
+
+  const existing = new Set(columns.results.map((column) => column.name));
+  const statements = [];
+  if (!existing.has("archived_at")) {
+    statements.push(env.SIGNAGE_DB.prepare("ALTER TABLE library_visits ADD COLUMN archived_at TEXT"));
+  }
+  if (!existing.has("archived_by")) {
+    statements.push(env.SIGNAGE_DB.prepare("ALTER TABLE library_visits ADD COLUMN archived_by TEXT"));
+  }
+  if (statements.length === 0) return;
+
+  statements.push(env.SIGNAGE_DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_library_visits_archived ON library_visits(archived_at, checked_in_at)"
+  ));
+  await env.SIGNAGE_DB.batch(statements);
+}
+
 async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
   await env.SIGNAGE_DB.batch([
     env.SIGNAGE_DB.prepare(
@@ -1184,6 +1223,8 @@ async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
         checked_out_at TEXT,
         checkout_method TEXT,
         checked_out_by TEXT,
+        archived_at TEXT,
+        archived_by TEXT,
         FOREIGN KEY (student_row_id) REFERENCES library_students(id)
       )`
     ),
@@ -1192,6 +1233,9 @@ async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
     ),
     env.SIGNAGE_DB.prepare(
       `CREATE INDEX IF NOT EXISTS idx_library_visits_student_active ON library_visits(student_row_id, checked_out_at)`
+    ),
+    env.SIGNAGE_DB.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_library_visits_archived ON library_visits(archived_at, checked_in_at)`
     ),
     env.SIGNAGE_DB.prepare(
       `CREATE TABLE IF NOT EXISTS library_sheet_events (

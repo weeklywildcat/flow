@@ -1,4 +1,4 @@
-import libraryApp from "./library";
+import libraryApp, { ensureVisitArchiveColumns } from "./library";
 import { adminHtml } from "./admin-ui";
 
 const TIMEZONE = "America/New_York" as const;
@@ -39,6 +39,8 @@ type HistoryRow = {
   checked_out_at: string | null;
   checkout_method: string | null;
   checked_out_by: string | null;
+  archived_at: string | null;
+  archived_by: string | null;
   duration_minutes: number | null;
 };
 
@@ -63,6 +65,7 @@ export default {
       if (!isStaffAuthorized(request)) return json({ error: "Unauthorized." }, 401);
 
       try {
+        await ensureVisitArchiveColumns(env);
         if (pathname === "/api/library/admin-overview") {
           return request.method === "GET" ? handleOverview(env) : methodNotAllowed(["GET"]);
         }
@@ -76,6 +79,9 @@ export default {
         }
         if (pathname === "/api/library/admin-history") {
           return request.method === "GET" ? handleHistory(request, env) : methodNotAllowed(["GET"]);
+        }
+        if (pathname === "/api/library/admin-archive-visit") {
+          return request.method === "POST" ? handleArchiveVisit(request, env) : methodNotAllowed(["POST"]);
         }
       } catch (error) {
         console.error(JSON.stringify({ event: "library_admin_error", pathname, error: String(error) }));
@@ -100,15 +106,15 @@ async function handleOverview(env: Env): Promise<Response> {
   const longVisitCutoff = new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString();
 
   const [current, todayVisits, uniqueToday, students, kiosks, onlineKiosks, recent, longVisits, staleKiosks] = await Promise.all([
-    env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_visits WHERE checked_out_at IS NULL").first<{ count: number }>(),
-    env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ?").bind(start, end).first<{ count: number }>(),
-    env.SIGNAGE_DB.prepare("SELECT COUNT(DISTINCT student_row_id) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ?").bind(start, end).first<{ count: number }>(),
+    env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_visits WHERE checked_out_at IS NULL AND archived_at IS NULL").first<{ count: number }>(),
+    env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ? AND archived_at IS NULL").bind(start, end).first<{ count: number }>(),
+    env.SIGNAGE_DB.prepare("SELECT COUNT(DISTINCT student_row_id) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ? AND archived_at IS NULL").bind(start, end).first<{ count: number }>(),
     env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_students WHERE active = 1").first<{ count: number }>(),
     env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_kiosk_devices WHERE revoked_at IS NULL").first<{ count: number }>(),
     env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_kiosk_devices WHERE revoked_at IS NULL AND last_seen_at >= ?").bind(onlineCutoff).first<{ count: number }>(),
-    env.SIGNAGE_DB.prepare(`${historySelectSql()} ORDER BY v.checked_in_at DESC LIMIT 10`).all<HistoryRow>(),
+    env.SIGNAGE_DB.prepare(`${historySelectSql()} WHERE v.archived_at IS NULL ORDER BY v.checked_in_at DESC LIMIT 10`).all<HistoryRow>(),
     env.SIGNAGE_DB.prepare(
-      `${historySelectSql()} WHERE v.checked_out_at IS NULL AND v.checked_in_at < ? ORDER BY v.checked_in_at ASC LIMIT 5`
+      `${historySelectSql()} WHERE v.checked_out_at IS NULL AND v.archived_at IS NULL AND v.checked_in_at < ? ORDER BY v.checked_in_at ASC LIMIT 5`
     ).bind(longVisitCutoff).all<HistoryRow>(),
     env.SIGNAGE_DB.prepare(
       `SELECT id, name, last_seen_at
@@ -173,7 +179,7 @@ async function handleStudents(request: Request, env: Env): Promise<Response> {
        COUNT(v.id) AS visit_count,
        MAX(v.checked_in_at) AS last_visit_at
      FROM library_students s
-     LEFT JOIN library_visits v ON v.student_row_id = s.id
+     LEFT JOIN library_visits v ON v.student_row_id = s.id AND v.archived_at IS NULL
      ${whereSql}
      GROUP BY s.id
      ORDER BY s.last_name COLLATE NOCASE, s.first_name COLLATE NOCASE, s.student_id
@@ -199,7 +205,7 @@ async function handleStudentDetail(request: Request, env: Env): Promise<Response
        COUNT(v.id) AS visit_count,
        MAX(v.checked_in_at) AS last_visit_at
      FROM library_students s
-     LEFT JOIN library_visits v ON v.student_row_id = s.id
+     LEFT JOIN library_visits v ON v.student_row_id = s.id AND v.archived_at IS NULL
      WHERE s.id = ?
      GROUP BY s.id`
   ).bind(id).first<AdminStudentRow>();
@@ -207,7 +213,7 @@ async function handleStudentDetail(request: Request, env: Env): Promise<Response
   if (!student) return json({ error: "Student was not found." }, 404);
 
   const recent = await env.SIGNAGE_DB.prepare(
-    `${historySelectSql()} WHERE v.student_row_id = ? ORDER BY v.checked_in_at DESC LIMIT 8`
+    `${historySelectSql()} WHERE v.student_row_id = ? AND v.archived_at IS NULL ORDER BY v.checked_in_at DESC LIMIT 8`
   ).bind(id).all<HistoryRow>();
 
   return json({
@@ -290,8 +296,10 @@ async function handleHistory(request: Request, env: Env): Promise<Response> {
   const to = parseDateOnly(url.searchParams.get("to"));
   const limit = clampInt(url.searchParams.get("limit"), 1, 200, 100);
   const offset = clampInt(url.searchParams.get("offset"), 0, 100000, 0);
+  const archived = url.searchParams.get("archived") === "1";
 
-  const where: string[] = [];
+  // Archived visits are only ever reachable through this explicit view.
+  const where: string[] = [archived ? "v.archived_at IS NOT NULL" : "v.archived_at IS NULL"];
   const binds: unknown[] = [];
 
   if (q) {
@@ -312,7 +320,7 @@ async function handleHistory(request: Request, env: Env): Promise<Response> {
     binds.push(localDateStartIso(addDateOnly(to, 1)));
   }
 
-  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const whereSql = `WHERE ${where.join(" AND ")}`;
   const countRow = await env.SIGNAGE_DB.prepare(
     `SELECT COUNT(*) AS count FROM library_visits v JOIN library_students s ON s.id = v.student_row_id ${whereSql}`
   ).bind(...binds).first<{ count: number }>();
@@ -329,6 +337,51 @@ async function handleHistory(request: Request, env: Env): Promise<Response> {
   });
 }
 
+async function handleArchiveVisit(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
+
+  const visitId = Number(body.visitId);
+  if (!Number.isInteger(visitId) || visitId < 1) return json({ error: "Invalid visit." }, 400);
+  const archived = body.archived !== false;
+
+  const existing = await env.SIGNAGE_DB.prepare(
+    "SELECT id, checked_out_at FROM library_visits WHERE id = ?"
+  ).bind(visitId).first<{ id: number; checked_out_at: string | null }>();
+  if (!existing) return json({ error: "That visit was not found." }, 404);
+
+  if (!archived) {
+    await env.SIGNAGE_DB.prepare(
+      "UPDATE library_visits SET archived_at = NULL, archived_by = NULL WHERE id = ?"
+    ).bind(visitId).run();
+    return json({ ok: true, visitId, archived: false });
+  }
+
+  const now = new Date().toISOString();
+  const actor = getActor(request);
+
+  // Close the visit on the way out if it never got a checkout. Otherwise it would sit archived
+  // and open forever, and restoring it later would silently drop the student back into the
+  // live occupancy count without anyone scanning them in.
+  if (existing.checked_out_at === null) {
+    await env.SIGNAGE_DB.prepare(
+      `UPDATE library_visits
+       SET checked_out_at = ?, checkout_method = 'librarian', checked_out_by = ?, archived_at = ?, archived_by = ?
+       WHERE id = ? AND archived_at IS NULL`
+    ).bind(now, actor, now, actor, visitId).run();
+  } else {
+    await env.SIGNAGE_DB.prepare(
+      "UPDATE library_visits SET archived_at = ?, archived_by = ? WHERE id = ? AND archived_at IS NULL"
+    ).bind(now, actor, visitId).run();
+  }
+
+  return json({ ok: true, visitId, archived: true, closed: existing.checked_out_at === null });
+}
+
+function getActor(request: Request): string {
+  return request.headers.get("CF-Access-Authenticated-User-Email")?.trim() || "Library staff";
+}
+
 function historySelectSql(): string {
   return `SELECT
       v.id,
@@ -341,6 +394,8 @@ function historySelectSql(): string {
       v.checked_out_at,
       v.checkout_method,
       v.checked_out_by,
+      v.archived_at,
+      v.archived_by,
       CASE
         WHEN v.checked_out_at IS NULL THEN NULL
         ELSE CAST(ROUND((julianday(v.checked_out_at) - julianday(v.checked_in_at)) * 1440) AS INTEGER)
@@ -361,6 +416,8 @@ function publicHistoryRow(row: HistoryRow) {
     checkedOutAt: row.checked_out_at,
     checkoutMethod: row.checkout_method,
     checkedOutBy: row.checked_out_by,
+    archivedAt: row.archived_at,
+    archivedBy: row.archived_by,
     durationMinutes: row.duration_minutes,
   };
 }

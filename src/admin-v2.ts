@@ -72,7 +72,7 @@ async function handleStats(request: Request, env: Env): Promise<Response> {
               v.reason, v.checked_in_at, v.checked_out_at
        FROM library_visits v
        JOIN library_students s ON s.id = v.student_row_id
-       WHERE v.checked_in_at >= ? AND v.checked_in_at < ?
+       WHERE v.checked_in_at >= ? AND v.checked_in_at < ? AND v.archived_at IS NULL
        ORDER BY v.checked_in_at ASC`
     ).bind(startIso, endIso).all<StatVisitRow>(),
     env.SIGNAGE_DB.prepare(
@@ -80,23 +80,24 @@ async function handleStats(request: Request, env: Env): Promise<Response> {
               v.reason, v.checked_in_at, v.checked_out_at
        FROM library_visits v
        JOIN library_students s ON s.id = v.student_row_id
-       WHERE v.checked_in_at < ? AND (v.checked_out_at IS NULL OR v.checked_out_at >= ?)
+       WHERE v.checked_in_at < ? AND (v.checked_out_at IS NULL OR v.checked_out_at >= ?) AND v.archived_at IS NULL
        ORDER BY v.checked_in_at ASC`
     ).bind(endIso, startIso).all<StatVisitRow>(),
     env.SIGNAGE_DB.prepare(
       `SELECT student_row_id, MIN(checked_in_at) AS first_seen
        FROM library_visits
+       WHERE archived_at IS NULL
        GROUP BY student_row_id`
     ).all<FirstVisitRow>(),
     env.SIGNAGE_DB.prepare(
-      `SELECT COUNT(*) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ?`
+      `SELECT COUNT(*) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ? AND archived_at IS NULL`
     ).bind(previousStartIso, previousEndIso).first<CountRow>(),
     env.SIGNAGE_DB.prepare(
       `SELECT v.id, v.student_row_id, v.student_id, s.first_name, s.last_name, s.grade,
               v.reason, v.checked_in_at, v.checked_out_at
        FROM library_visits v
        JOIN library_students s ON s.id = v.student_row_id
-       WHERE v.checked_in_at >= ? AND v.checked_in_at < ?
+       WHERE v.checked_in_at >= ? AND v.checked_in_at < ? AND v.archived_at IS NULL
        ORDER BY v.checked_in_at ASC`
     ).bind(schoolStartIso, schoolEndExclusive).all<StatVisitRow>(),
   ]);

@@ -54,7 +54,7 @@ async function enrichStudentTime(response: Response, request: Request, env: Env)
        SUM(CASE WHEN checked_out_at IS NOT NULL AND checked_out_at >= checked_in_at THEN 1 ELSE 0 END) AS completed_count,
        MAX(CASE WHEN checked_out_at IS NULL THEN checked_in_at ELSE NULL END) AS active_since
      FROM library_visits
-     WHERE student_row_id = ?`
+     WHERE student_row_id = ? AND archived_at IS NULL`
   ).bind(id).first<StudentTimeRow>();
 
   const completedMinutes = Math.max(0, Number(row?.completed_minutes ?? 0));
@@ -89,13 +89,13 @@ async function enrichStats(response: Response, env: Env): Promise<Response> {
     env.SIGNAGE_DB.prepare(
       `SELECT checked_in_at, checked_out_at
        FROM library_visits
-       WHERE checked_in_at >= ? AND checked_in_at < ?
+       WHERE checked_in_at >= ? AND checked_in_at < ? AND archived_at IS NULL
        ORDER BY checked_in_at ASC`
     ).bind(startIso, endIso).all<VisitTimeRow>(),
     env.SIGNAGE_DB.prepare(
       `SELECT checked_in_at, checked_out_at
        FROM library_visits
-       WHERE checked_in_at < ? AND (checked_out_at IS NULL OR checked_out_at >= ?)
+       WHERE checked_in_at < ? AND (checked_out_at IS NULL OR checked_out_at >= ?) AND archived_at IS NULL
        ORDER BY checked_in_at ASC`
     ).bind(endIso, startIso).all<VisitTimeRow>(),
   ]);
