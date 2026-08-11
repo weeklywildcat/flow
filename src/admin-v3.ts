@@ -21,7 +21,7 @@ export default {
     const start = localDateStartIso(comparison.from);
     const end = localDateStartIso(addDateOnly(comparison.to, 1));
     const row = await env.SIGNAGE_DB.prepare(
-      "SELECT COUNT(*) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ?"
+      "SELECT COUNT(*) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ? AND archived_at IS NULL"
     ).bind(start, end).first<{ count: number }>();
     const previousVisits = row?.count ?? 0;
 

@@ -51,9 +51,26 @@ npx wrangler secret put SHEETS_WEBHOOK_SECRET -c wrangler.library.jsonc
 
 The Apps Script receiver is idempotent by `sheetEventId`, supports events that arrive out of order, and migrates an older `Events` tab by adding its `Sync ID` column.
 
+## Archiving visits
+
+The History tab has an **Active records / Archived records** switch and an Archive action on every row. Archiving hides a visit from history, the overview counts, stats and CSV export, and it leaves the row in `library_visits` with `archived_at` and `archived_by` set. Restore puts it back. Archiving a visit that never got a checkout also closes it, so an archived record can never sit open and rejoin the live count when restored.
+
+Use it for records that should not have existed — test scans, duplicates, a check-in the student abandoned. It is not a retention tool; nothing is deleted.
+
+```text
+POST /api/library/admin-archive-visit   {"visitId": 123, "archived": true}
+GET  /api/library/admin-history?archived=1
+```
+
+Existing databases pick up the two columns automatically on the first request after deploy. To apply them by hand instead:
+
+```bash
+npx wrangler d1 execute wildcat-signage --command="ALTER TABLE library_visits ADD COLUMN archived_at TEXT; ALTER TABLE library_visits ADD COLUMN archived_by TEXT" -c wrangler.library.jsonc
+```
+
 ## CSV export
 
-The librarian dashboard includes an **Export history** control with Today, Last 7 days, Last 30 days, and Custom dates options. It exports visits checked in during the inclusive date range, including active visits that have not checked out yet. The direct staff endpoint is:
+The librarian dashboard includes an **Export history** control with Today, Last 7 days, Last 30 days, and Custom dates options. It exports visits checked in during the inclusive date range, including active visits that have not checked out yet, and excluding archived visits. The direct staff endpoint is:
 
 ```text
 GET /api/library/export-csv?from=YYYY-MM-DD&to=YYYY-MM-DD
