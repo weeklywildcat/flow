@@ -1308,8 +1308,6 @@ function kioskHtml(): string {
       width: clamp(26px, 2.8vw, 36px);
       margin-left: .18em;
       vertical-align: middle;
-      animation: barcodeArrowNudge 1.25s ease-in-out infinite alternate;
-      transform-origin: left center;
     }
 
     .barcode-scanner-arrow svg {
@@ -1317,11 +1315,6 @@ function kioskHtml(): string {
       width: 100%;
       height: auto;
       overflow: visible;
-    }
-
-    @keyframes barcodeArrowNudge {
-      from { transform: translateX(0); }
-      to { transform: translateX(5px); }
     }
 
     .screen {
@@ -2015,7 +2008,7 @@ function kioskHtml(): string {
       .student-form select { min-height: 48px; font-size: 19px; }
     }
 
-    /* Kiosk visual refinements; motion behavior stays unchanged. */
+    /* Kiosk visual refinements; motion is tuned for quick kiosk visits. */
     :root {
       --bg: #f5f5f7;
       --surface: rgba(255, 255, 255, .9);
@@ -2039,8 +2032,8 @@ function kioskHtml(): string {
       position: relative;
       isolation: isolate;
       background:
-        radial-gradient(circle at 12% -10%, rgba(0, 122, 255, .09), transparent 30%),
-        radial-gradient(circle at 92% 110%, rgba(175, 82, 222, .055), transparent 28%),
+        radial-gradient(circle at 16% 4%, rgba(0, 122, 255, .16), transparent 36%),
+        radial-gradient(circle at 84% 96%, rgba(175, 82, 222, .12), transparent 34%),
         var(--bg);
     }
 
@@ -2049,37 +2042,39 @@ function kioskHtml(): string {
       content: "";
       position: fixed;
       z-index: 0;
-      width: clamp(280px, 42vw, 680px);
-      height: clamp(280px, 42vw, 680px);
+      width: clamp(340px, 52vw, 760px);
+      height: clamp(340px, 52vw, 760px);
       border-radius: 50%;
       pointer-events: none;
-      filter: blur(4px);
-      opacity: .68;
+      filter: blur(2px);
+      opacity: .86;
       will-change: transform;
     }
 
     body::before {
-      top: clamp(-220px, -12vw, -90px);
-      left: clamp(-220px, -10vw, -70px);
-      background: radial-gradient(circle at 42% 42%, rgba(0, 122, 255, .22), rgba(0, 122, 255, .08) 34%, rgba(175, 82, 222, .07) 54%, transparent 74%);
-      animation: kioskOrbDrift 15s ease-in-out infinite alternate;
+      top: clamp(-160px, -8vw, -50px);
+      left: clamp(-150px, -6vw, -35px);
+      background: radial-gradient(circle at 44% 44%, rgba(0, 122, 255, .4), rgba(88, 86, 214, .23) 38%, rgba(175, 82, 222, .13) 56%, transparent 74%);
+      animation: kioskOrbDrift 5.5s ease-in-out infinite;
     }
 
     body::after {
-      right: clamp(-220px, -11vw, -80px);
-      bottom: clamp(-220px, -12vw, -90px);
-      background: radial-gradient(circle at 58% 52%, rgba(175, 82, 222, .17), rgba(52, 199, 89, .06) 44%, transparent 73%);
-      animation: kioskOrbDriftAlt 18s ease-in-out infinite alternate;
+      right: clamp(-160px, -8vw, -50px);
+      bottom: clamp(-160px, -8vw, -50px);
+      background: radial-gradient(circle at 58% 52%, rgba(255, 45, 85, .22), rgba(175, 82, 222, .24) 40%, rgba(52, 199, 89, .1) 58%, transparent 74%);
+      animation: kioskOrbDriftAlt 6.5s ease-in-out infinite;
     }
 
     @keyframes kioskOrbDrift {
-      from { transform: translate3d(0, 0, 0) scale(1); }
-      to { transform: translate3d(52px, 34px, 0) scale(1.08); }
+      0% { transform: translate3d(-18px, -8px, 0) scale(.92) rotate(-4deg); }
+      55% { transform: translate3d(78px, 50px, 0) scale(1.1) rotate(8deg); }
+      100% { transform: translate3d(18px, 86px, 0) scale(.98) rotate(-2deg); }
     }
 
     @keyframes kioskOrbDriftAlt {
-      from { transform: translate3d(0, 0, 0) scale(1.04); }
-      to { transform: translate3d(-46px, -30px, 0) scale(.96); }
+      0% { transform: translate3d(24px, 70px, 0) scale(.94) rotate(5deg); }
+      50% { transform: translate3d(-72px, -40px, 0) scale(1.08) rotate(-8deg); }
+      100% { transform: translate3d(-12px, 8px, 0) scale(1) rotate(2deg); }
     }
 
     .shell {
