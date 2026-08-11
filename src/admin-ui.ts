@@ -1,1 +1,1 @@
-export { adminHtml } from "./admin-ui-v6";
+export { adminHtml } from "./admin-ui-v7";
