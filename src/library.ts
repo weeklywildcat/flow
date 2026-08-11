@@ -1304,18 +1304,24 @@ function kioskHtml(): string {
     }
 
     .barcode-scanner-arrow {
-      display: inline-block;
-      margin-left: .12em;
-      animation: barcodeArrowNudge 3.6s ease-in-out infinite;
+      display: inline-flex;
+      width: clamp(26px, 2.8vw, 36px);
+      margin-left: .18em;
+      vertical-align: middle;
+      animation: barcodeArrowNudge 1.25s ease-in-out infinite alternate;
       transform-origin: left center;
     }
 
+    .barcode-scanner-arrow svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      overflow: visible;
+    }
+
     @keyframes barcodeArrowNudge {
-      0%, 68%, 100% { transform: translateX(0); }
-      73% { transform: translateX(4px); }
-      78% { transform: translateX(0); }
-      83% { transform: translateX(3px); }
-      88% { transform: translateX(0); }
+      from { transform: translateX(0); }
+      to { transform: translateX(5px); }
     }
 
     .screen {
@@ -2398,7 +2404,7 @@ function kioskHtml(): string {
         </form>
         <button class="cancel" id="cancel" type="button">Cancel</button>
       </section>
-      <div class="barcode-scanner-hint" aria-label="Barcode Scanner">Barcode Scanner <span class="barcode-scanner-arrow" aria-hidden="true">&rarr;</span></div>
+      <div class="barcode-scanner-hint" aria-label="Barcode Scanner">Barcode Scanner <span class="barcode-scanner-arrow" aria-hidden="true"><svg viewBox="0 0 40 20" fill="none"><path d="M2 10h31M25 3l8 7-8 7" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
     </main>
 
     <footer class="footer">
