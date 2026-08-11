@@ -1287,6 +1287,20 @@ function kioskHtml(): string {
       display: grid;
       place-items: center;
       padding: clamp(16px, 2.8vh, 28px) clamp(24px, 4vw, 54px);
+      position: relative;
+    }
+
+    .barcode-scanner-hint {
+      position: absolute;
+      right: clamp(16px, 3vw, 38px);
+      bottom: clamp(10px, 1.8vh, 20px);
+      z-index: 1;
+      color: #007aff;
+      font-size: clamp(13px, 1.5vw, 18px);
+      font-weight: 600;
+      line-height: 1;
+      letter-spacing: .01em;
+      white-space: nowrap;
     }
 
     .screen {
@@ -2369,6 +2383,7 @@ function kioskHtml(): string {
         </form>
         <button class="cancel" id="cancel" type="button">Cancel</button>
       </section>
+      <div class="barcode-scanner-hint" aria-label="Barcode Scanner">Barcode Scanner ----&gt;</div>
     </main>
 
     <footer class="footer">
@@ -3043,6 +3058,83 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
 
     .danger { background: var(--red); }
     .small { min-height: 32px; padding: 0 12px; font-size: 13px; }
+
+    .confirm-dialog {
+      width: min(460px, calc(100vw - 32px));
+      max-width: calc(100vw - 32px);
+      margin: auto;
+      padding: 0;
+      border: 0;
+      border-radius: 18px;
+      background: var(--surface);
+      color: var(--ink);
+      box-shadow: 0 24px 80px rgba(23, 26, 31, 0.22);
+    }
+
+    .confirm-dialog::backdrop {
+      background: rgba(23, 26, 31, 0.34);
+      backdrop-filter: blur(3px);
+    }
+
+    .confirm-dialog-content {
+      display: grid;
+      gap: 14px;
+      padding: 24px;
+    }
+
+    .confirm-dialog-kicker {
+      color: var(--red);
+      font-size: 11px;
+      font-weight: 750;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .confirm-dialog h2 {
+      font-size: 22px;
+      line-height: 1.1;
+      letter-spacing: -0.025em;
+    }
+
+    .confirm-dialog-message {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.4;
+    }
+
+    .confirm-dialog-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.3;
+      cursor: pointer;
+    }
+
+    .confirm-dialog-option input {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      flex: 0 0 auto;
+      accent-color: var(--blue);
+    }
+
+    .confirm-dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .confirm-dialog-actions button { min-width: 112px; }
+
+    @media (max-width: 520px) {
+      .confirm-dialog-content { padding: 20px; }
+      .confirm-dialog-actions { display: grid; grid-template-columns: 1fr 1fr; }
+      .confirm-dialog-actions button { min-width: 0; }
+    }
 
     button:focus-visible,
     input:focus-visible,
@@ -4780,6 +4872,22 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
         </div>
       </aside>
     </main>
+
+    <dialog class="confirm-dialog" id="clear-confirm" aria-labelledby="clear-confirm-title" aria-describedby="clear-confirm-message">
+      <div class="confirm-dialog-content">
+        <div class="confirm-dialog-kicker">Confirm checkout</div>
+        <h2 id="clear-confirm-title">Check everyone out?</h2>
+        <p class="confirm-dialog-message" id="clear-confirm-message"></p>
+        <label class="confirm-dialog-option">
+          <input id="clear-confirm-never" type="checkbox">
+          <span>Don't tell me again</span>
+        </label>
+        <div class="confirm-dialog-actions">
+          <button class="secondary" id="clear-confirm-cancel" type="button">Cancel</button>
+          <button class="danger" id="clear-confirm-continue" type="button">Check everyone out</button>
+        </div>
+      </div>
+    </dialog>
   </div>
 
   <script>
@@ -4793,6 +4901,9 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
     let previousRenderedCount = null;
     let refreshPromise = null;
     let lastRefreshStartedAt = 0;
+    let clearConfirmResolve = null;
+    let clearConfirmPromise = null;
+    const clearConfirmPreferenceKey = 'library.manage.clearAll.dontTellAgain';
 
     async function api(url, options = {}) {
       const controller = new AbortController();
@@ -5073,11 +5184,59 @@ function manageHtml(pairing?: { pin: string; expiresAt: string; name: string }):
       }
     });
 
-    $('clear-all').addEventListener('click', async () => {
+    function clearConfirmationWasDismissed() {
+      try {
+        return window.localStorage.getItem(clearConfirmPreferenceKey) === 'true';
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function resolveClearConfirmation(confirmed) {
+      const dialog = $('clear-confirm');
+      const resolve = clearConfirmResolve;
+      clearConfirmResolve = null;
+      clearConfirmPromise = null;
+      if (confirmed && $('clear-confirm-never').checked) {
+        try {
+          window.localStorage.setItem(clearConfirmPreferenceKey, 'true');
+        } catch (error) {
+          // Continue without persisting the preference if storage is unavailable.
+        }
+      }
+      if (dialog.open) dialog.close();
+      if (resolve) resolve(confirmed);
+    }
+
+    function requestClearConfirmation(count) {
+      if (clearConfirmationWasDismissed()) return Promise.resolve(true);
+      if (clearConfirmPromise) return clearConfirmPromise;
+
+      const dialog = $('clear-confirm');
+      const checkoutMessage = count === 1
+        ? 'This will check out the only student currently in the library.'
+        : 'This will check out all ' + count + ' students currently in the library.';
+      $('clear-confirm-message').textContent = checkoutMessage + ' Hold Command (Mac) or Ctrl (Windows) while clicking the button to skip this reminder.';
+      $('clear-confirm-never').checked = false;
+      dialog.showModal();
+      $('clear-confirm-continue').focus();
+      clearConfirmPromise = new Promise((resolve) => {
+        clearConfirmResolve = resolve;
+      });
+      return clearConfirmPromise;
+    }
+
+    $('clear-confirm-cancel').addEventListener('click', () => resolveClearConfirmation(false));
+    $('clear-confirm-continue').addEventListener('click', () => resolveClearConfirmation(true));
+    $('clear-confirm').addEventListener('cancel', (event) => {
+      event.preventDefault();
+      resolveClearConfirmation(false);
+    });
+
+    $('clear-all').addEventListener('click', async (event) => {
       const count = latestStudentCount || 0;
       if (count < 1) return;
-      const message = count === 1 ? 'Check out this student?' : 'Check out all ' + count + ' students?';
-      if (!confirm(message)) return;
+      if (!(event.metaKey || event.ctrlKey) && !(await requestClearConfirmation(count))) return;
       setNotice(count === 1 ? 'Checking out student...' : 'Checking everyone out...');
       try {
         const data = await post('/library/manage?api=clear', { method: 'clear_all' });
