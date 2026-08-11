@@ -2354,6 +2354,8 @@ function kioskHtml(): string {
       --motion-ease: cubic-bezier(.22, 1, .36, 1);
       --motion-smooth: cubic-bezier(.4, 0, .2, 1);
       --motion-standard: 420ms;
+      --orb-duration-primary: 26s;
+      --orb-duration-secondary: 32s;
     }
 
     body {
@@ -2380,12 +2382,18 @@ function kioskHtml(): string {
       will-change: transform;
     }
 
+    /* Keep the welcome screen lively, then let the background recede during interaction. */
+    body[data-step="idle"][data-tone="idle"] {
+      --orb-duration-primary: 5.4s;
+      --orb-duration-secondary: 7.2s;
+    }
+
     body::before {
       top: clamp(-160px, -8vw, -50px);
       left: clamp(-150px, -6vw, -35px);
       border-radius: 46% 54% 61% 39% / 47% 42% 58% 53%;
       background: radial-gradient(ellipse at 44% 44%, rgba(0, 122, 255, .42) 0%, rgba(88, 86, 214, .28) 24%, rgba(175, 82, 222, .16) 48%, rgba(175, 82, 222, .05) 64%, transparent 82%);
-      animation: kioskOrbDrift 9s ease-in-out infinite;
+      animation: kioskOrbDrift var(--orb-duration-primary) ease-in-out infinite;
       animation-delay: -2.25s;
     }
 
@@ -2394,7 +2402,7 @@ function kioskHtml(): string {
       bottom: clamp(-160px, -8vw, -50px);
       border-radius: 58% 42% 38% 62% / 44% 56% 45% 55%;
       background: radial-gradient(ellipse at 58% 52%, rgba(255, 45, 85, .28) 0%, rgba(175, 82, 222, .28) 26%, rgba(52, 199, 89, .12) 50%, rgba(52, 199, 89, .03) 66%, transparent 83%);
-      animation: kioskOrbDriftAlt 11s ease-in-out infinite;
+      animation: kioskOrbDriftAlt var(--orb-duration-secondary) ease-in-out infinite;
       animation-delay: -4.5s;
     }
 
