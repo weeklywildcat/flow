@@ -1323,17 +1323,35 @@ function kioskHtml(): string {
       min-height: 0;
       display: grid;
       place-items: center;
+    }
+
+    .screen-content {
+      width: 100%;
+      max-height: 100%;
+      min-height: 0;
+      display: grid;
+      place-items: center;
       align-content: center;
       text-align: center;
+      transform-origin: center;
+      will-change: opacity, transform, filter;
+      transition: opacity 220ms var(--motion-smooth), transform 420ms var(--motion-ease), filter 420ms var(--motion-ease);
     }
 
-    .screen.fade-in {
-      animation: screenFade 160ms ease-out both;
+    .screen-content.is-leaving {
+      opacity: 0;
+      transform: translateY(12px) scale(.985);
+      filter: blur(3px);
+      pointer-events: none;
     }
 
-    @keyframes screenFade {
-      from { opacity: 0.82; transform: translateY(3px); }
-      to { opacity: 1; transform: translateY(0); }
+    .screen-content.is-entering {
+      animation: screenContentEnter 500ms var(--motion-ease) both;
+    }
+
+    @keyframes screenContentEnter {
+      from { opacity: 0; transform: translateY(-10px) scale(.985); filter: blur(3px); }
+      to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
     }
 
     body[data-step="success"] .scan-status {
@@ -2026,15 +2044,20 @@ function kioskHtml(): string {
       --focus: #007aff;
       --font-ui: "Helvetica Neue", Helvetica, Arial, sans-serif;
       --font-display: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      --motion-ease: cubic-bezier(.22, 1, .36, 1);
+      --motion-smooth: cubic-bezier(.4, 0, .2, 1);
+      --motion-standard: 420ms;
     }
 
     body {
       position: relative;
       isolation: isolate;
-      background:
+      background-color: var(--bg);
+      background-image:
         radial-gradient(circle at 16% 4%, rgba(0, 122, 255, .16), transparent 36%),
-        radial-gradient(circle at 84% 96%, rgba(175, 82, 222, .12), transparent 34%),
-        var(--bg);
+        radial-gradient(circle at 84% 96%, rgba(175, 82, 222, .12), transparent 34%);
+      background-repeat: no-repeat;
+      transition: background-color var(--motion-standard) var(--motion-smooth), color var(--motion-standard) var(--motion-smooth);
     }
 
     body::before,
@@ -2099,12 +2122,24 @@ function kioskHtml(): string {
     h1 { font-weight: 700; letter-spacing: -.03em; }
     .lead { color: var(--muted); font-weight: 400; letter-spacing: 0; line-height: 1.2; }
 
+    .eyebrow,
+    h1,
+    .lead,
+    .scan-status,
+    .scan-symbol,
+    .status-title,
+    .status-detail,
+    .footer-status {
+      transition: color var(--motion-standard) var(--motion-smooth), background-color var(--motion-standard) var(--motion-smooth), border-color var(--motion-standard) var(--motion-smooth), box-shadow var(--motion-standard) var(--motion-smooth);
+    }
+
     .scan-status {
       border-color: rgba(0, 0, 0, .08);
       border-radius: 24px;
       background: rgba(255, 255, 255, .82);
       box-shadow: 0 2px 4px rgba(0, 0, 0, .025), 0 18px 54px rgba(0, 0, 0, .07);
       backdrop-filter: blur(20px) saturate(155%);
+      transform-origin: center;
     }
 
     .scan-symbol {
@@ -2213,13 +2248,13 @@ function kioskHtml(): string {
     }
 
     body[data-tone="working"] {
-      background: radial-gradient(circle at 50% 44%, rgba(255, 159, 10, .12), transparent 38%), var(--amber-soft);
+      background-color: var(--amber-soft);
     }
     body[data-tone="success"] {
-      background: radial-gradient(circle at 50% 44%, rgba(52, 199, 89, .13), transparent 38%), var(--green-soft);
+      background-color: var(--green-soft);
     }
     body[data-tone="error"] {
-      background: radial-gradient(circle at 50% 44%, rgba(255, 59, 48, .12), transparent 38%), var(--red-soft);
+      background-color: var(--red-soft);
     }
 
     body[data-scan-flash="true"] .scan-status {
@@ -2397,57 +2432,59 @@ function kioskHtml(): string {
 
     <main class="stage">
       <section class="screen" aria-live="polite">
-        <div class="eyebrow" id="eyebrow">Library Check-In</div>
-        <h1 id="headline">Scan your student ID.</h1>
-        <p class="lead" id="lead">Check in or check out.</p>
+        <div class="screen-content">
+          <div class="eyebrow" id="eyebrow">Library Check-In</div>
+          <h1 id="headline">Scan your student ID.</h1>
+          <p class="lead" id="lead">Check in or check out.</p>
 
-        <div class="scan-status" id="scan-status">
-          <div class="scan-symbol" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 7V5a1 1 0 0 1 1-1h2"/><path d="M17 4h2a1 1 0 0 1 1 1v2"/>
-              <path d="M20 17v2a1 1 0 0 1-1 1h-2"/><path d="M7 20H5a1 1 0 0 1-1-1v-2"/>
-              <path d="M7 9h10"/><path d="M7 12h10"/><path d="M7 15h6"/>
-            </svg>
+          <div class="scan-status" id="scan-status">
+            <div class="scan-symbol" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 7V5a1 1 0 0 1 1-1h2"/><path d="M17 4h2a1 1 0 0 1 1 1v2"/>
+                <path d="M20 17v2a1 1 0 0 1-1 1h-2"/><path d="M7 20H5a1 1 0 0 1-1-1v-2"/>
+                <path d="M7 9h10"/><path d="M7 12h10"/><path d="M7 15h6"/>
+              </svg>
+            </div>
+            <div>
+              <div class="status-title" id="status-title">Ready to scan</div>
+              <div class="status-detail" id="status-detail">Hold the barcode up to the scanner.</div>
+            </div>
           </div>
-          <div>
-            <div class="status-title" id="status-title">Ready to scan</div>
-            <div class="status-detail" id="status-detail">Hold the barcode up to the scanner.</div>
-          </div>
+
+          <div class="reason-grid" id="reasons">${reasons}</div>
+          <form class="student-form" id="student-form">
+            <div class="student-form-grid">
+              <div class="student-form-field">
+                <label for="new-first-name">First name</label>
+                <input id="new-first-name" name="firstName" autocomplete="given-name" required>
+              </div>
+              <div class="student-form-field">
+                <label for="new-last-name">Last name</label>
+                <input id="new-last-name" name="lastName" autocomplete="family-name" required>
+              </div>
+              <div class="student-form-field full">
+                <label for="new-grade">Grade</label>
+                <select id="new-grade" name="grade" required>
+                  <option value="">Choose grade</option>
+                  <option value="9">9th grade</option>
+                  <option value="10">10th grade</option>
+                  <option value="11">11th grade</option>
+                  <option value="12">12th grade</option>
+                </select>
+              </div>
+            </div>
+            <div class="student-form-actions">
+              <button type="submit">Continue</button>
+            </div>
+          </form>
+          <form class="pairing-form" id="pairing-form">
+            <label for="pairing-pin">Pairing PIN</label>
+            <input id="pairing-pin" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{8}" maxlength="8" placeholder="00000000" required>
+            <button type="submit">Pair this Chromebook</button>
+            <div class="pairing-error" id="pairing-error" role="alert"></div>
+          </form>
+          <button class="cancel" id="cancel" type="button">Cancel</button>
         </div>
-
-        <div class="reason-grid" id="reasons">${reasons}</div>
-        <form class="student-form" id="student-form">
-          <div class="student-form-grid">
-            <div class="student-form-field">
-              <label for="new-first-name">First name</label>
-              <input id="new-first-name" name="firstName" autocomplete="given-name" required>
-            </div>
-            <div class="student-form-field">
-              <label for="new-last-name">Last name</label>
-              <input id="new-last-name" name="lastName" autocomplete="family-name" required>
-            </div>
-            <div class="student-form-field full">
-              <label for="new-grade">Grade</label>
-              <select id="new-grade" name="grade" required>
-                <option value="">Choose grade</option>
-                <option value="9">9th grade</option>
-                <option value="10">10th grade</option>
-                <option value="11">11th grade</option>
-                <option value="12">12th grade</option>
-              </select>
-            </div>
-          </div>
-          <div class="student-form-actions">
-            <button type="submit">Continue</button>
-          </div>
-        </form>
-        <form class="pairing-form" id="pairing-form">
-          <label for="pairing-pin">Pairing PIN</label>
-          <input id="pairing-pin" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{8}" maxlength="8" placeholder="00000000" required>
-          <button type="submit">Pair this Chromebook</button>
-          <div class="pairing-error" id="pairing-error" role="alert"></div>
-        </form>
-        <button class="cancel" id="cancel" type="button">Cancel</button>
       </section>
       <div class="barcode-scanner-hint" aria-label="Barcode Scanner">Barcode Scanner <span class="barcode-scanner-arrow" aria-hidden="true"><svg viewBox="0 0 40 20" fill="none"><path d="M2 10h31M25 3l8 7-8 7" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
     </main>
@@ -2469,7 +2506,6 @@ function kioskHtml(): string {
     const hint = document.getElementById('hint');
     const scanInput = document.getElementById('scan-input');
     const footerStatus = document.getElementById('footer-status');
-    const screen = document.querySelector('.screen');
     const studentForm = document.getElementById('student-form');
     const pairingForm = document.getElementById('pairing-form');
     const pairingPin = document.getElementById('pairing-pin');
@@ -2477,6 +2513,7 @@ function kioskHtml(): string {
     const newFirstName = document.getElementById('new-first-name');
     const newLastName = document.getElementById('new-last-name');
     const newGrade = document.getElementById('new-grade');
+    const screenContent = document.querySelector('.screen-content');
 
     let currentBarcode = '';
     let currentFirstName = '';
@@ -2486,6 +2523,7 @@ function kioskHtml(): string {
     let workingTimer = null;
     let reasonTimer = null;
     let connectivityTimer = null;
+    let copyTransitionTimer = null;
     let busy = false;
     let checkingConnection = false;
 
@@ -2535,6 +2573,8 @@ function kioskHtml(): string {
       clearTimeout(workingTimer);
       clearTimeout(reasonTimer);
       clearTimeout(connectivityTimer);
+      clearTimeout(copyTransitionTimer);
+      copyTransitionTimer = null;
     }
 
     function sleep(ms) {
@@ -2563,7 +2603,7 @@ function kioskHtml(): string {
       }, 340);
     }
 
-    function setCopy(next) {
+    function applyCopy(next) {
       eyebrow.textContent = next.eyebrow;
       headline.textContent = next.headline;
       lead.textContent = next.lead;
@@ -2571,11 +2611,25 @@ function kioskHtml(): string {
       statusDetail.textContent = next.statusDetail;
       hint.textContent = next.hint || 'Need help? See the librarian.';
       footerStatus.textContent = next.footerStatus;
-      if (screen) {
-        screen.classList.remove('fade-in');
-        void screen.offsetWidth;
-        screen.classList.add('fade-in');
+    }
+
+    function setCopy(next) {
+      const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!screenContent || reducedMotion) {
+        applyCopy(next);
+        return;
       }
+
+      clearTimeout(copyTransitionTimer);
+      screenContent.classList.remove('is-entering');
+      screenContent.classList.add('is-leaving');
+      copyTransitionTimer = window.setTimeout(() => {
+        applyCopy(next);
+        screenContent.classList.remove('is-leaving');
+        void screenContent.offsetWidth;
+        screenContent.classList.add('is-entering');
+        copyTransitionTimer = null;
+      }, 120);
     }
 
     function showIdle() {
