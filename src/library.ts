@@ -1303,6 +1303,21 @@ function kioskHtml(): string {
       white-space: nowrap;
     }
 
+    .barcode-scanner-arrow {
+      display: inline-block;
+      margin-left: .12em;
+      animation: barcodeArrowNudge 3.6s ease-in-out infinite;
+      transform-origin: left center;
+    }
+
+    @keyframes barcodeArrowNudge {
+      0%, 68%, 100% { transform: translateX(0); }
+      73% { transform: translateX(4px); }
+      78% { transform: translateX(0); }
+      83% { transform: translateX(3px); }
+      88% { transform: translateX(0); }
+    }
+
     .screen {
       width: min(920px, 100%);
       max-height: 100%;
@@ -2383,7 +2398,7 @@ function kioskHtml(): string {
         </form>
         <button class="cancel" id="cancel" type="button">Cancel</button>
       </section>
-      <div class="barcode-scanner-hint" aria-label="Barcode Scanner">Barcode Scanner &rarr;</div>
+      <div class="barcode-scanner-hint" aria-label="Barcode Scanner">Barcode Scanner <span class="barcode-scanner-arrow" aria-hidden="true">&rarr;</span></div>
     </main>
 
     <footer class="footer">
