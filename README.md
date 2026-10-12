@@ -33,8 +33,17 @@ Cloudflare Access should protect `/library/manage` and staff API routes. Kiosk r
 ```
 
 - `currentCount` uses the same definition as the live roster: visits with no checkout that are not archived.
-- `latestCheckIn` describes the newest non-archived check-in by time (row id breaks ties). `cursor` changes whenever a newer check-in exists, so a poller can tell that someone arrived even if the count did not change. It is `null` when there are no visits. Checkouts never change it.
+- `latestCheckIn` describes the newest non-archived check-in by time (row id breaks ties). It is `null` when there are no visits. Checkouts never change it.
 - Nothing else is returned: no names, student IDs, grades, reasons, roster, or checkout details. Other methods return `405`. Responses are `no-store`.
+
+A changed `cursor` alone does **not** mean someone arrived: archiving the newest visit moves `latestCheckIn` back to the previous one (for example `"2"` → `"1"`). Pollers should treat it as a new arrival only when both hold:
+
+```
+latestCheckIn.cursor != previousCursor
+AND latestCheckIn.at > previousLatestCheckInAt
+```
+
+On startup or restart, record the current `cursor` and `at` without treating them as an arrival, so a restart never greets whoever happened to check in last. Never move `previousLatestCheckInAt` backward when the cursor regresses: keep the latest `at` you have seen, otherwise restoring an archived visit would look like a new arrival. A `null` previous value (no visits yet) counts as earlier than any time. Compare `at` as times (ISO-8601 UTC strings in this format also compare correctly as strings). Several check-ins between two polls appear as one change; `currentCount` is always the authoritative occupancy.
 
 `GET /api/library/current` is the opposite: it returns the active roster and stays staff-only.
 
