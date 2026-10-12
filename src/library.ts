@@ -140,8 +140,9 @@ export default {
         return Response.redirect(`${url.origin}/library/kiosk`, 302);
       }
 
-      // Public, unauthenticated, aggregate-only feed for signage. It deliberately lives outside
-      // /api/library/* so the staff and kiosk authorization above stays exactly as it is.
+      // Public, unauthenticated, minimal presence feed for signage: occupancy plus the first name
+      // on the latest check-in, nothing more. It deliberately lives outside /api/library/* so the
+      // staff and kiosk authorization above stays exactly as it is.
       if (pathname === "/library/presence.json") {
         return request.method === "GET" ? handlePublicPresence(env) : methodNotAllowed(["GET"]);
       }
@@ -992,29 +993,36 @@ async function getCurrentState(env: LibraryEnv, includeStudents: boolean) {
 }
 
 /**
- * The complete public presence contract. Every field is a primitive built explicitly below, and
- * `satisfies` makes the type check reject any extra property, so no student, visit, roster or
- * staff field can be added to this response by accident.
+ * The complete public presence contract. The only student information it may carry is the
+ * first name attached to the latest check-in. Every field is a primitive built explicitly below,
+ * and `satisfies` makes the type check reject any extra property, so no other student, visit,
+ * roster or staff field can be added to this response by accident.
  */
 type PublicPresence = {
   schemaVersion: 1;
   currentCount: number;
   generatedAt: string;
-  latestCheckIn: { cursor: string; at: string } | null;
+  latestCheckIn: { cursor: string; at: string; firstName: string | null } | null;
 };
 
 type LatestCheckInSignalRow = {
   id: number;
   checked_in_at: string;
+  first_name: string | null;
 };
 
-/** Newest non-archived check-in, reduced to its row id and time. Selects nothing else. */
+/**
+ * Newest non-archived check-in: its row id, time, and the student's first name. Selects nothing
+ * else. The LEFT JOIN keeps the visit (the canonical arrival signal) even if its student row is
+ * missing, in which case the name is simply null.
+ */
 async function getLatestCheckInSignal(env: LibraryEnv): Promise<LatestCheckInSignalRow | null> {
   const row = await env.SIGNAGE_DB.prepare(
-    `SELECT id, checked_in_at
-     FROM library_visits
-     WHERE archived_at IS NULL
-     ORDER BY checked_in_at DESC, id DESC
+    `SELECT v.id, v.checked_in_at, s.first_name
+     FROM library_visits v
+     LEFT JOIN library_students s ON s.id = v.student_row_id
+     WHERE v.archived_at IS NULL
+     ORDER BY v.checked_in_at DESC, v.id DESC
      LIMIT 1`
   ).first<LatestCheckInSignalRow>();
   return row ?? null;
@@ -1030,7 +1038,9 @@ async function handlePublicPresence(env: LibraryEnv): Promise<Response> {
     schemaVersion: 1,
     currentCount,
     generatedAt: new Date().toISOString(),
-    latestCheckIn: latest ? { cursor: String(latest.id), at: latest.checked_in_at } : null,
+    latestCheckIn: latest
+      ? { cursor: String(latest.id), at: latest.checked_in_at, firstName: latest.first_name?.trim() || null }
+      : null,
   } satisfies PublicPresence;
 
   return json(presence);
