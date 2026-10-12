@@ -78,6 +78,7 @@ export type Overview = {
   activeStudents: number
   pairedKiosks: number
   onlineKiosks: number
+  flaggedVisits: number
   recent: Visit[]
   attention: {
     longVisits: Visit[]
@@ -100,6 +101,23 @@ export type Student = {
   completedTimeMinutes?: number
   averageCompletedVisitMinutes?: number | null
   activeSince?: string | null
+}
+
+export type FlagKind = "open" | "cleared" | "long"
+
+export type FlaggedVisit = Visit & {
+  flag: FlagKind
+  elapsedMinutes: number
+  /** Longest length that keeps the checkout in the past. */
+  maxMinutes: number
+  suggestedMinutes: number
+}
+
+export type FlaggedList = {
+  thresholdMinutes: number
+  total: number
+  typical: { overallMinutes: number; byReason: Record<string, number>; sampleSize: number; lookbackDays: number }
+  visits: FlaggedVisit[]
 }
 
 export type StudentList = { total: number; limit: number; offset: number; students: Student[] }

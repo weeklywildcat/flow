@@ -1,11 +1,15 @@
-import adminApp from "./admin-v7";
+import adminApp from "./admin";
 
 const MANAGE_PATH = "/library/manage";
-const MANAGE_ASSET_PREFIX = `${MANAGE_PATH}/`;
+const KIOSK_PATH = "/library/kiosk";
 const MANAGE_API_PATTERN = /^[a-z0-9-]+$/;
+// Vite fingerprints everything here, so it can be cached for good. It sits outside the
+// Access-protected /library/manage path because the kiosk loads the same shared chunks.
+const SHARED_ASSET_PREFIX = "/library/assets/";
+const PUBLIC_FILES = new Set(["/library/favicon.svg"]);
 
-// The dashboard is a static React bundle, so scripts never need to be inline.
-const DASHBOARD_SECURITY_HEADERS: Record<string, string> = {
+// The dashboard and kiosk are static React bundles, so scripts never need to be inline.
+const PAGE_SECURITY_HEADERS: Record<string, string> = {
   "Content-Security-Policy":
     "default-src 'none'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; manifest-src 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'",
   "Referrer-Policy": "no-referrer",
@@ -50,17 +54,18 @@ export default {
         });
       }
 
-      return serveDashboardAsset(env, request, `${MANAGE_ASSET_PREFIX}index.html`, "no-store");
+      return servePageAsset(env, request, `${MANAGE_PATH}/index.html`, "no-store");
     }
 
-    if (
-      url.pathname.startsWith(MANAGE_ASSET_PREFIX) &&
-      !url.pathname.startsWith(`${MANAGE_ASSET_PREFIX}api/`) &&
-      (request.method === "GET" || request.method === "HEAD")
-    ) {
-      // Vite fingerprints everything under assets/, so those files can be cached for good.
-      const immutable = url.pathname.startsWith(`${MANAGE_ASSET_PREFIX}assets/`);
-      return serveDashboardAsset(env, request, url.pathname, immutable ? "public, max-age=31536000, immutable" : "no-cache");
+    const readable = request.method === "GET" || request.method === "HEAD";
+    if (pathname === KIOSK_PATH && readable) {
+      return servePageAsset(env, request, `${KIOSK_PATH}/index.html`, "no-store");
+    }
+    if (url.pathname.startsWith(SHARED_ASSET_PREFIX) && readable) {
+      return servePageAsset(env, request, url.pathname, "public, max-age=31536000, immutable");
+    }
+    if (PUBLIC_FILES.has(url.pathname) && readable) {
+      return servePageAsset(env, request, url.pathname, "no-cache");
     }
 
     return adminApp.fetch(request, env, ctx);
@@ -71,7 +76,7 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-async function serveDashboardAsset(env: Env, request: Request, assetPath: string, cacheControl: string): Promise<Response> {
+async function servePageAsset(env: Env, request: Request, assetPath: string, cacheControl: string): Promise<Response> {
   const assetUrl = new URL(request.url);
   assetUrl.pathname = assetPath;
   assetUrl.search = "";
@@ -79,13 +84,13 @@ async function serveDashboardAsset(env: Env, request: Request, assetPath: string
 
   if (asset.status === 404) {
     const missing = assetPath.endsWith("index.html")
-      ? "The librarian dashboard has not been built. Run npm run build before deploying."
+      ? "This page has not been built. Run npm run build before deploying."
       : "Not found.";
-    return new Response(missing, { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8", ...DASHBOARD_SECURITY_HEADERS } });
+    return new Response(missing, { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8", ...PAGE_SECURITY_HEADERS } });
   }
 
   const headers = new Headers(asset.headers);
-  for (const [name, value] of Object.entries(DASHBOARD_SECURITY_HEADERS)) headers.set(name, value);
+  for (const [name, value] of Object.entries(PAGE_SECURITY_HEADERS)) headers.set(name, value);
   if (asset.ok) headers.set("Cache-Control", cacheControl);
   return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
 }

@@ -4,7 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-12",
   "compatibility_flags": ["nodejs_compat"],
-  // The librarian dashboard (dashboard/) builds into dist/client. The Worker runs first on every
+  // The dashboard and kiosk (web/) build into dist/client. The Worker runs first on every
   // request so Cloudflare Access headers and the API routes are handled before any asset.
   "assets": {
     "directory": "./dist/client",

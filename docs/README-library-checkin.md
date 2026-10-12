@@ -9,12 +9,15 @@ The library Worker is intentionally focused on one workflow: recording who is in
 - A known student with an active visit is checked out immediately when they scan again.
 - A new barcode can be saved with the student’s name and grade, then checked in.
 
+The kiosk is built from the same shadcn/ui setup in [`web/src/kiosk`](../web/src/kiosk). Pairing uses a one-time 8-digit PIN from **Devices & data**. Both pages share their JavaScript and CSS from `/library/assets/`, which sits outside the Access-protected `/library/manage` path so the kiosk can load it; the shared files contain no data, and every staff API route still requires Access.
+
 ## Librarian dashboard
 
-Open `/library/manage` behind Cloudflare Access. The dashboard is a React app in [`dashboard/`](../dashboard) built with shadcn/ui (Base UI, `base-luma` style) and served by the Worker from static assets. It has five sections:
+Open `/library/manage` behind Cloudflare Access. The dashboard is a React app in [`web/`](../web) built with shadcn/ui (Base UI, `base-luma` style) and served by the Worker from static assets. It has five sections:
 
 - **Now** — the live roster with per-student checkout, a “Check everyone out” action that lets you correct the time of anyone who stayed more than 30 minutes, today’s counts, open visits over two hours, offline kiosks, and recent activity.
 - **Visits** — history by date range, reason, or name, with CSV export, duration editing (one visit or many), and archive/restore.
+- **Flagged** — likely missed checkouts: visits over two hours, or still open two hours after check-in. Fix them in bulk to a typical length for their reason (the median of visits students scanned out of themselves over the last 90 days) or one length for all; open ones are checked out at the corrected time so Google Sheets records it. **Keep as is** clears the flag for a visit that really was that long.
 - **Students** — the directory, a profile sheet with visit totals and a checkout shortcut, add/edit, and CSV or JSON roster import.
 - **Insights** — traffic, time of day, weekdays, reasons, grades, regulars, lunch-window facts, and school-year milestones.
 - **Devices & data** — Chromebook pairing and revocation, Google Sheets sync status with **Sync now**, and CSV export.

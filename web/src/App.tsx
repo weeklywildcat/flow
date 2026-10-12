@@ -8,10 +8,11 @@ import { StudentSheet } from "@/components/student-sheet"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { get, type CurrentState } from "@/lib/api"
+import { get, type Overview } from "@/lib/api"
 import { DashboardContext, isPageId, type PageId, type StudentRef } from "@/lib/dashboard"
 import { useVisibleInterval } from "@/lib/hooks"
 import { DevicesPage } from "@/pages/devices"
+import { FlaggedPage } from "@/pages/flagged"
 import { NowPage } from "@/pages/now"
 import { StudentsPage } from "@/pages/students"
 import { VisitsPage } from "@/pages/visits"
@@ -31,6 +32,7 @@ export function App() {
   const [page, setPageState] = React.useState<PageId>(pageFromHash)
   const [dataVersion, setDataVersion] = React.useState(0)
   const [currentCount, setCurrentCount] = React.useState<number | null>(null)
+  const [flaggedCount, setFlaggedCount] = React.useState<number | null>(null)
   const [student, setStudent] = React.useState<StudentRef | null>(null)
   const [commandOpen, setCommandOpen] = React.useState(false)
 
@@ -57,10 +59,13 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
-  // Keeps the sidebar count current while staff are on other pages; the Now page polls faster.
+  // Keeps the sidebar counts current while staff are on other pages; the Now page polls faster.
   const refreshCount = React.useCallback(() => {
-    get<CurrentState>("current")
-      .then((state) => setCurrentCount(state.currentCount))
+    get<Overview>("admin-overview")
+      .then((overview) => {
+        setCurrentCount(overview.currentCount)
+        setFlaggedCount(overview.flaggedVisits)
+      })
       .catch(() => {})
   }, [])
   React.useEffect(refreshCount, [refreshCount, dataVersion])
@@ -77,8 +82,10 @@ export function App() {
       invalidate: () => setDataVersion((version) => version + 1),
       currentCount,
       setCurrentCount,
+      flaggedCount,
+      setFlaggedCount,
     }),
-    [page, setPage, dataVersion, currentCount]
+    [page, setPage, dataVersion, currentCount, flaggedCount]
   )
 
   return (
@@ -92,6 +99,7 @@ export function App() {
               <main className="flex-1">
                 {page === "now" ? <NowPage /> : null}
                 {page === "visits" ? <VisitsPage /> : null}
+                {page === "flagged" ? <FlaggedPage /> : null}
                 {page === "students" ? <StudentsPage /> : null}
                 {page === "insights" ? (
                   <React.Suspense fallback={null}>
