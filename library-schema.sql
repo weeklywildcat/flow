@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS library_visits (
   checked_out_by TEXT,
   archived_at TEXT,
   archived_by TEXT,
+  flag_reviewed_at TEXT,
   FOREIGN KEY (student_row_id) REFERENCES library_students(id)
 );
 

@@ -3,6 +3,7 @@ import {
   Analytics01Icon,
   Clock01Icon,
   ComputerIcon,
+  Flag02Icon,
   LinkSquare02Icon,
   StudentsIcon,
   UserMultiple02Icon,
@@ -32,6 +33,7 @@ const GROUPS: { label: string; items: { id: PageId; icon: IconSvgElement }[] }[]
     label: "Records",
     items: [
       { id: "visits", icon: Clock01Icon },
+      { id: "flagged", icon: Flag02Icon },
       { id: "students", icon: StudentsIcon },
     ],
   },
@@ -40,7 +42,7 @@ const GROUPS: { label: string; items: { id: PageId; icon: IconSvgElement }[] }[]
 ]
 
 export function AppSidebar() {
-  const { page, setPage, currentCount } = useDashboard()
+  const { page, setPage, currentCount, flaggedCount } = useDashboard()
   const { isMobile, setOpenMobile } = useSidebar()
 
   function go(id: PageId) {
@@ -81,6 +83,11 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                     {item.id === "now" && currentCount !== null ? (
                       <SidebarMenuBadge className="tabular-nums">{currentCount}</SidebarMenuBadge>
+                    ) : null}
+                    {item.id === "flagged" && flaggedCount ? (
+                      <SidebarMenuBadge className="bg-amber-500/15 text-amber-700 tabular-nums dark:text-amber-400">
+                        {flaggedCount}
+                      </SidebarMenuBadge>
                     ) : null}
                   </SidebarMenuItem>
                 ))}

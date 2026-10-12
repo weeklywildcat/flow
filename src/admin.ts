@@ -1,4 +1,4 @@
-import libraryApp, { ensureVisitArchiveColumns } from "./library";
+import libraryApp, { closeVisitAt, ensureVisitArchiveColumns } from "./library";
 
 const TIMEZONE = "America/New_York" as const;
 
@@ -74,6 +74,11 @@ const LUNCH_START_MINUTE = 11 * 60 + 45;
 const LUNCH_END_MINUTE = 13 * 60 + 40;
 const MAX_DURATION_MINUTES = 1440;
 const MAX_BATCH_VISITS = 200;
+/** Longer than this, a visit is probably a missed checkout. Matches the overview's "needs attention" cutoff. */
+const LONG_VISIT_MINUTES = 120;
+/** How far back "typical" visit lengths are measured, and the fallback when there is no history. */
+const TYPICAL_LOOKBACK_DAYS = 90;
+const DEFAULT_TYPICAL_MINUTES = 30;
 
 type Handler = (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
 type Route = { GET?: Handler; POST?: Handler; error: string };
@@ -89,6 +94,9 @@ const ROUTES: Record<string, Route> = {
   "/api/library/admin-update-visit-duration": { POST: handleUpdateVisitDuration, error: "Could not update that visit duration." },
   "/api/library/admin-update-visit-durations": { POST: handleUpdateVisitDurations, error: "Could not update those visit durations." },
   "/api/library/admin-clear-with-durations": { POST: handleClearWithDurations, error: "Could not check everyone out." },
+  "/api/library/admin-flagged-visits": { GET: handleFlaggedVisits, error: "Could not load flagged visits." },
+  "/api/library/admin-fix-visits": { POST: handleFixVisits, error: "Could not fix those visits." },
+  "/api/library/admin-review-flag": { POST: handleReviewFlag, error: "Could not update that visit." },
 };
 
 export default {
@@ -122,9 +130,8 @@ async function handleOverview(env: Env): Promise<Response> {
   const start = localDateStartIso(today);
   const end = localDateStartIso(addDateOnly(today, 1));
   const onlineCutoff = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
-  const longVisitCutoff = new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString();
 
-  const [current, todayVisits, uniqueToday, students, kiosks, onlineKiosks, recent, longVisits, staleKiosks] = await Promise.all([
+  const [current, todayVisits, uniqueToday, students, kiosks, onlineKiosks, recent, longVisits, staleKiosks, flaggedVisits] = await Promise.all([
     env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_visits WHERE checked_out_at IS NULL AND archived_at IS NULL").first<{ count: number }>(),
     env.SIGNAGE_DB.prepare("SELECT COUNT(*) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ? AND archived_at IS NULL").bind(start, end).first<{ count: number }>(),
     env.SIGNAGE_DB.prepare("SELECT COUNT(DISTINCT student_row_id) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ? AND archived_at IS NULL").bind(start, end).first<{ count: number }>(),
@@ -134,7 +141,7 @@ async function handleOverview(env: Env): Promise<Response> {
     env.SIGNAGE_DB.prepare(`${historySelectSql()} WHERE v.archived_at IS NULL ORDER BY v.checked_in_at DESC LIMIT 10`).all<HistoryRow>(),
     env.SIGNAGE_DB.prepare(
       `${historySelectSql()} WHERE v.checked_out_at IS NULL AND v.archived_at IS NULL AND v.checked_in_at < ? ORDER BY v.checked_in_at ASC LIMIT 5`
-    ).bind(longVisitCutoff).all<HistoryRow>(),
+    ).bind(longVisitCutoff(now.getTime())).all<HistoryRow>(),
     env.SIGNAGE_DB.prepare(
       `SELECT id, name, last_seen_at
        FROM library_kiosk_devices
@@ -142,6 +149,7 @@ async function handleOverview(env: Env): Promise<Response> {
        ORDER BY CASE WHEN last_seen_at IS NULL THEN 0 ELSE 1 END, last_seen_at ASC
        LIMIT 5`
     ).bind(onlineCutoff).all<KioskAttentionRow>(),
+    countFlaggedVisits(env),
   ]);
 
   return json({
@@ -152,6 +160,7 @@ async function handleOverview(env: Env): Promise<Response> {
     activeStudents: students?.count ?? 0,
     pairedKiosks: kiosks?.count ?? 0,
     onlineKiosks: onlineKiosks?.count ?? 0,
+    flaggedVisits,
     recent: recent.results.map(publicHistoryRow),
     attention: {
       longVisits: longVisits.results.map(publicHistoryRow),
@@ -915,6 +924,146 @@ async function handleClearWithDurations(request: Request, env: Env, ctx: Executi
   }
 
   return json({ ...clearedBody, ok: true, adjusted: updates.length });
+}
+
+/**
+ * A visit is flagged when it ran past LONG_VISIT_MINUTES, or is still open that long after
+ * check-in, and nobody has reviewed it yet. Both usually mean a student forgot to scan out.
+ */
+const FLAGGED_WHERE = `v.archived_at IS NULL AND v.flag_reviewed_at IS NULL AND (
+    (v.checked_out_at IS NULL AND v.checked_in_at < ?)
+    OR (v.checked_out_at IS NOT NULL AND (julianday(v.checked_out_at) - julianday(v.checked_in_at)) * 1440 > ${LONG_VISIT_MINUTES})
+  )`;
+
+function longVisitCutoff(now = Date.now()): string {
+  return new Date(now - LONG_VISIT_MINUTES * 60_000).toISOString();
+}
+
+async function countFlaggedVisits(env: Env): Promise<number> {
+  const row = await env.SIGNAGE_DB.prepare(`SELECT COUNT(*) AS count FROM library_visits v WHERE ${FLAGGED_WHERE}`)
+    .bind(longVisitCutoff())
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
+async function handleFlaggedVisits(_request: Request, env: Env): Promise<Response> {
+  const now = Date.now();
+  const typicalSince = new Date(now - TYPICAL_LOOKBACK_DAYS * 86_400_000).toISOString();
+
+  const [rows, total, samples] = await Promise.all([
+    env.SIGNAGE_DB.prepare(`${historySelectSql()} WHERE ${FLAGGED_WHERE} ORDER BY v.checked_in_at DESC LIMIT ?`)
+      .bind(longVisitCutoff(now), MAX_BATCH_VISITS)
+      .all<HistoryRow>(),
+    countFlaggedVisits(env),
+    // Only visits students scanned out of themselves are trusted as "normal" lengths.
+    env.SIGNAGE_DB.prepare(
+      `SELECT reason, (julianday(checked_out_at) - julianday(checked_in_at)) * 1440 AS minutes
+       FROM library_visits
+       WHERE archived_at IS NULL AND checkout_method = 'scan_out' AND checked_out_at IS NOT NULL
+         AND checked_in_at >= ?
+         AND (julianday(checked_out_at) - julianday(checked_in_at)) * 1440 BETWEEN 1 AND ${LONG_VISIT_MINUTES}`
+    ).bind(typicalSince).all<{ reason: string; minutes: number }>(),
+  ]);
+
+  const byReasonSamples = new Map<string, number[]>();
+  for (const sample of samples.results) {
+    const list = byReasonSamples.get(sample.reason) ?? [];
+    list.push(sample.minutes);
+    byReasonSamples.set(sample.reason, list);
+  }
+  const overall = median(samples.results.map((sample) => Math.round(sample.minutes))) ?? DEFAULT_TYPICAL_MINUTES;
+  const byReason: Record<string, number> = {};
+  for (const [reason, minutes] of byReasonSamples) {
+    // A handful of visits is too few to call a reason's length typical.
+    if (minutes.length >= 5) byReason[reason] = median(minutes.map((value) => Math.round(value))) ?? overall;
+  }
+
+  return json({
+    thresholdMinutes: LONG_VISIT_MINUTES,
+    total,
+    typical: { overallMinutes: overall, byReason, sampleSize: samples.results.length, lookbackDays: TYPICAL_LOOKBACK_DAYS },
+    visits: rows.results.map((row) => {
+      const elapsed = Math.max(0, Math.floor((now - new Date(row.checked_in_at).getTime()) / 60000));
+      const maxMinutes = Math.min(MAX_DURATION_MINUTES, elapsed);
+      const flag = row.checked_out_at === null
+        ? "open"
+        : row.checkout_method === "clear_all" || row.checkout_method === "auto_end_of_day"
+          ? "cleared"
+          : "long";
+      return {
+        ...publicHistoryRow(row),
+        flag,
+        elapsedMinutes: elapsed,
+        maxMinutes,
+        suggestedMinutes: Math.min(maxMinutes, byReason[row.reason] ?? overall),
+      };
+    }),
+  });
+}
+
+async function handleFixVisits(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!isRecord(body) || !Array.isArray(body.fixes)) return json({ error: "Invalid request body." }, 400);
+
+  const fixes = parseDurationUpdates(body.fixes);
+  if (fixes === null) {
+    return json({ error: `Each length must be a whole number of minutes between 0 and ${MAX_DURATION_MINUTES}.` }, 400);
+  }
+  if (fixes.length === 0) return json({ error: "Select at least one visit to fix." }, 400);
+  if (fixes.length > MAX_BATCH_VISITS) return json({ error: `Fix ${MAX_BATCH_VISITS} visits or fewer at a time.` }, 400);
+
+  const placeholders = fixes.map(() => "?").join(",");
+  const rows = await env.SIGNAGE_DB.prepare(
+    `SELECT id, checked_in_at, checked_out_at, archived_at FROM library_visits WHERE id IN (${placeholders})`
+  ).bind(...fixes.map((fix) => fix.visitId)).all<EditableVisitRow>();
+  const existing = new Map(rows.results.map((row) => [row.id, row]));
+  const now = Date.now();
+  const planned: { visitId: number; checkedOutAt: string; open: boolean }[] = [];
+
+  // Validate the whole batch before writing anything.
+  for (const fix of fixes) {
+    const visit = existing.get(fix.visitId);
+    if (!visit) return json({ error: "One of those visits was not found. Refresh and try again." }, 404);
+    if (visit.archived_at !== null) return json({ error: "One of those visits was archived. Refresh and try again." }, 409);
+    const checkedOutMs = checkedInMs(visit) + fix.durationMinutes * 60_000;
+    if (checkedOutMs > now) return json({ error: "A length cannot put the checkout time in the future." }, 400);
+    planned.push({ visitId: fix.visitId, checkedOutAt: new Date(checkedOutMs).toISOString(), open: visit.checked_out_at === null });
+  }
+
+  const actor = getActor(request);
+  let closed = 0;
+  const moves: D1PreparedStatement[] = [];
+  for (const fix of planned) {
+    if (fix.open && (await closeVisitAt(env, ctx, fix.visitId, fix.checkedOutAt, actor))) {
+      closed += 1;
+      continue;
+    }
+    // Either it was already closed, or someone checked it out while this was being reviewed.
+    moves.push(moveCheckoutStatement(env, fix.visitId, fix.checkedOutAt));
+  }
+
+  const reviewedAt = new Date(now).toISOString();
+  await env.SIGNAGE_DB.batch([
+    ...moves,
+    env.SIGNAGE_DB.prepare(`UPDATE library_visits SET flag_reviewed_at = ? WHERE id IN (${placeholders})`)
+      .bind(reviewedAt, ...planned.map((fix) => fix.visitId)),
+  ]);
+
+  return json({ ok: true, fixed: planned.length, closed });
+}
+
+async function handleReviewFlag(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
+  const visitId = Number(body.visitId);
+  if (!Number.isInteger(visitId) || visitId < 1) return json({ error: "Invalid visit." }, 400);
+  const reviewed = body.reviewed !== false;
+
+  const result = await env.SIGNAGE_DB.prepare("UPDATE library_visits SET flag_reviewed_at = ? WHERE id = ? AND archived_at IS NULL")
+    .bind(reviewed ? new Date().toISOString() : null, visitId)
+    .run();
+  if ((result.meta.changes ?? 0) !== 1) return json({ error: "That visit was not found." }, 404);
+  return json({ ok: true, visitId, reviewed });
 }
 
 function parseDurationUpdates(value: unknown[]): DurationUpdate[] | null {

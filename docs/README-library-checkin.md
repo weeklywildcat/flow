@@ -15,6 +15,7 @@ Open `/library/manage` behind Cloudflare Access. The dashboard is a React app in
 
 - **Now** — the live roster with per-student checkout, a “Check everyone out” action that lets you correct the time of anyone who stayed more than 30 minutes, today’s counts, open visits over two hours, offline kiosks, and recent activity.
 - **Visits** — history by date range, reason, or name, with CSV export, duration editing (one visit or many), and archive/restore.
+- **Flagged** — likely missed checkouts: visits over two hours, or still open two hours after check-in. Fix them in bulk to a typical length for their reason (the median of visits students scanned out of themselves over the last 90 days) or one length for all; open ones are checked out at the corrected time so Google Sheets records it. **Keep as is** clears the flag for a visit that really was that long.
 - **Students** — the directory, a profile sheet with visit totals and a checkout shortcut, add/edit, and CSV or JSON roster import.
 - **Insights** — traffic, time of day, weekdays, reasons, grades, regulars, lunch-window facts, and school-year milestones.
 - **Devices & data** — Chromebook pairing and revocation, Google Sheets sync status with **Sync now**, and CSV export.

@@ -4,6 +4,7 @@ import {
   Analytics01Icon,
   Clock01Icon,
   ComputerIcon,
+  Flag02Icon,
   StudentsIcon,
   UserAdd01Icon,
   UserMultiple02Icon,
@@ -27,6 +28,7 @@ import { fullName } from "@/lib/format"
 const PAGE_ICONS: Record<PageId, IconSvgElement> = {
   now: UserMultiple02Icon,
   visits: Clock01Icon,
+  flagged: Flag02Icon,
   students: StudentsIcon,
   insights: Analytics01Icon,
   devices: ComputerIcon,

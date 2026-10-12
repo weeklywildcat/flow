@@ -919,6 +919,22 @@ async function completeCheckout(
   return updatedVisit;
 }
 
+/**
+ * Closes an open visit at a chosen time through the normal checkout path, so the
+ * Google Sheets archive records the corrected checkout rather than the current time.
+ */
+export async function closeVisitAt(
+  env: LibraryEnv,
+  ctx: ExecutionContext,
+  visitId: number,
+  checkedOutAt: string,
+  actor: string,
+): Promise<boolean> {
+  const visit = await getVisitById(env, visitId);
+  if (!visit || visit.checked_out_at) return false;
+  return (await completeCheckout(env, ctx, visit, "librarian", actor, checkedOutAt)) !== null;
+}
+
 async function getCurrentState(env: LibraryEnv, includeStudents: boolean) {
   const currentCount = await getActiveCount(env);
   const activeVisits = includeStudents ? await getActiveVisits(env) : [];
@@ -1168,11 +1184,16 @@ async function migrateVisitArchiveColumns(env: LibraryEnv): Promise<void> {
   if (!existing.has("archived_by")) {
     statements.push(env.SIGNAGE_DB.prepare("ALTER TABLE library_visits ADD COLUMN archived_by TEXT"));
   }
+  if (statements.length > 0) {
+    statements.push(env.SIGNAGE_DB.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_library_visits_archived ON library_visits(archived_at, checked_in_at)"
+    ));
+  }
+  // Set when a librarian reviews a flagged visit, so it stops showing up as a likely missed checkout.
+  if (!existing.has("flag_reviewed_at")) {
+    statements.push(env.SIGNAGE_DB.prepare("ALTER TABLE library_visits ADD COLUMN flag_reviewed_at TEXT"));
+  }
   if (statements.length === 0) return;
-
-  statements.push(env.SIGNAGE_DB.prepare(
-    "CREATE INDEX IF NOT EXISTS idx_library_visits_archived ON library_visits(archived_at, checked_in_at)"
-  ));
   await env.SIGNAGE_DB.batch(statements);
 }
 
@@ -1202,6 +1223,7 @@ async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
         checked_out_by TEXT,
         archived_at TEXT,
         archived_by TEXT,
+        flag_reviewed_at TEXT,
         FOREIGN KEY (student_row_id) REFERENCES library_students(id)
       )`
     ),
