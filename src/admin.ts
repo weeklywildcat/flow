@@ -78,7 +78,7 @@ const MAX_BATCH_VISITS = 200;
 /** A school directory is a few thousand rows at most; beyond this the dashboard searches on the server. */
 const MAX_DIRECTORY_STUDENTS = 5000;
 /** Longer than this, a visit is probably a missed checkout. Matches the overview's "needs attention" cutoff. */
-const LONG_VISIT_MINUTES = 120;
+const LONG_VISIT_MINUTES = 60;
 /** How far back "typical" visit lengths are measured, and the fallback when there is no history. */
 const TYPICAL_LOOKBACK_DAYS = 90;
 const DEFAULT_TYPICAL_MINUTES = 30;
