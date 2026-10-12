@@ -39,7 +39,7 @@ import {
   type KioskStudent,
   type ScanResult,
 } from "./api"
-import { createEffects, startBackgroundMotion, type Effects } from "./fx"
+import { createEffects, type Effects } from "./fx"
 
 type SuccessVariant = "checkin" | "checkout"
 
@@ -126,13 +126,6 @@ export function Kiosk() {
   const fxFront = React.useRef<HTMLDivElement>(null)
   const fxBack = React.useRef<HTMLDivElement>(null)
   const effects = React.useRef<Effects | null>(null)
-  const motion = React.useRef<ReturnType<typeof startBackgroundMotion> | null>(null)
-  const orbs = {
-    primaryDrift: React.useRef<HTMLDivElement>(null),
-    secondaryDrift: React.useRef<HTMLDivElement>(null),
-    primaryOrb: React.useRef<HTMLDivElement>(null),
-    secondaryOrb: React.useRef<HTMLDivElement>(null),
-  }
 
   const clearTimer = (name: keyof typeof timers.current) => window.clearTimeout(timers.current[name])
   const clearTimers = () => (Object.keys(timers.current) as (keyof typeof timers.current)[]).forEach(clearTimer)
@@ -395,25 +388,14 @@ export function Kiosk() {
 
   React.useEffect(() => {
     if (fxFront.current && fxBack.current) effects.current = createEffects(fxFront.current, fxBack.current)
-    const nodes = {
-      primaryDrift: orbs.primaryDrift.current,
-      secondaryDrift: orbs.secondaryDrift.current,
-      primaryOrb: orbs.primaryOrb.current,
-      secondaryOrb: orbs.secondaryOrb.current,
-    }
-    if (nodes.primaryDrift && nodes.secondaryDrift && nodes.primaryOrb && nodes.secondaryOrb) {
-      motion.current = startBackgroundMotion(nodes as Parameters<typeof startBackgroundMotion>[0])
-    }
     void verifyConnectionRef.current()
     return () => {
-      motion.current?.stop()
       Object.values(timers.current).forEach((id) => window.clearTimeout(id))
     }
     // Runs once: the refs are stable and verifyConnection is read through its ref.
   }, [])
 
   React.useEffect(() => {
-    motion.current?.setWelcome(screen.kind === "idle")
     if (screen.kind === "success") {
       const variant = screen.variant
       // Wait for the success layout so the burst starts from the badge itself.
@@ -492,14 +474,6 @@ export function Kiosk() {
 
   return (
     <div className="kiosk relative flex h-dvh flex-col overflow-hidden text-foreground select-none" data-tone={tone(screen)}>
-      <div className="orb-field" aria-hidden="true">
-        <div className="orb-drift" ref={orbs.primaryDrift}>
-          <div className="orb orb-primary" ref={orbs.primaryOrb} />
-        </div>
-        <div className="orb-drift" ref={orbs.secondaryDrift}>
-          <div className="orb orb-secondary" ref={orbs.secondaryOrb} />
-        </div>
-      </div>
       <div className="fx-layer" ref={fxBack} aria-hidden="true" />
 
       <header className="relative z-10 flex items-center justify-between gap-4 px-[clamp(1rem,3vw,2.5rem)] pt-[clamp(0.75rem,2.5vh,1.75rem)]">
