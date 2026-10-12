@@ -8,7 +8,7 @@ The Chromebook kiosk lets students scan their ID to check in or check out. The l
 
 - `GET /library/kiosk` — scanner kiosk for student check-in/out (the React app in `web/src/kiosk`).
 - `GET /library/manage` — Cloudflare Access-protected librarian dashboard (the React app in `web/src`).
-- `GET /library/presence.json` — public aggregate library occupancy feed for signage; contains no student information.
+- `GET /library/presence.json` — public minimal library presence feed for signage; exposes occupancy and the first name attached to the latest check-in.
 - `POST /api/library/scan` — resolve a scanned student ID.
 - `POST /api/library/checkin` — record a visit.
 - `POST /api/library/checkout` — close a visit.
@@ -21,20 +21,21 @@ Cloudflare Access should protect `/library/manage` and staff API routes. Kiosk r
 
 ### Public presence feed
 
-`GET /library/presence.json` is intentionally unauthenticated and aggregate-only, for signage such as Tilecast:
+`GET /library/presence.json` is an intentionally unauthenticated, minimal presence feed for signage such as Tilecast:
 
 ```json
 {
   "schemaVersion": 1,
   "currentCount": 12,
   "generatedAt": "2026-10-12T17:55:34.123Z",
-  "latestCheckIn": { "cursor": "2451", "at": "2026-10-12T17:55:31.402Z" }
+  "latestCheckIn": { "cursor": "2451", "at": "2026-10-12T17:55:31.402Z", "firstName": "Gibson" }
 }
 ```
 
 - `currentCount` uses the same definition as the live roster: visits with no checkout that are not archived.
 - `latestCheckIn` describes the newest non-archived check-in by time (row id breaks ties). It is `null` when there are no visits. Checkouts never change it.
-- Nothing else is returned: no names, student IDs, grades, reasons, roster, or checkout details. Other methods return `405`. Responses are `no-store`.
+- `latestCheckIn.firstName` is that student's first name, for a greeting such as `Welcome, Gibson!`. It is `null` if the name is unavailable; fall back to a generic welcome. It is display metadata only and plays no part in detecting arrivals.
+- Privacy boundary: the feed exposes the current occupancy plus only the first name, timestamp, and anonymous visit cursor of the latest non-archived check-in. It never exposes the active roster, other students' names, last names, student IDs, barcodes, grades, reasons, durations, checkout details, or staff information. Other methods return `405`. Responses are `no-store`.
 
 A changed `cursor` alone does **not** mean someone arrived: archiving the newest visit moves `latestCheckIn` back to the previous one (for example `"2"` → `"1"`). Pollers should treat it as a new arrival only when both hold:
 
