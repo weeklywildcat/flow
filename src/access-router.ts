@@ -1,4 +1,4 @@
-import adminApp from "./admin-v7";
+import adminApp from "./admin";
 
 const MANAGE_PATH = "/library/manage";
 const MANAGE_ASSET_PREFIX = `${MANAGE_PATH}/`;
@@ -53,11 +53,7 @@ export default {
       return serveDashboardAsset(env, request, `${MANAGE_ASSET_PREFIX}index.html`, "no-store");
     }
 
-    if (
-      url.pathname.startsWith(MANAGE_ASSET_PREFIX) &&
-      !url.pathname.startsWith(`${MANAGE_ASSET_PREFIX}api/`) &&
-      (request.method === "GET" || request.method === "HEAD")
-    ) {
+    if (url.pathname.startsWith(MANAGE_ASSET_PREFIX) && (request.method === "GET" || request.method === "HEAD")) {
       // Vite fingerprints everything under assets/, so those files can be cached for good.
       const immutable = url.pathname.startsWith(`${MANAGE_ASSET_PREFIX}assets/`);
       return serveDashboardAsset(env, request, url.pathname, immutable ? "public, max-age=31536000, immutable" : "no-cache");

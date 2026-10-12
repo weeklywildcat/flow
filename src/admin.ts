@@ -43,40 +43,72 @@ type KioskAttentionRow = {
   last_seen_at: string | null;
 };
 
+type StudentTimeRow = {
+  completed_minutes: number | null;
+  completed_count: number;
+  active_since: string | null;
+};
+
+type StatVisitRow = {
+  id: number;
+  student_row_id: number;
+  student_id: string;
+  first_name: string;
+  last_name: string;
+  grade: string | null;
+  reason: string;
+  checked_in_at: string;
+  checked_out_at: string | null;
+};
+
+type EditableVisitRow = {
+  id: number;
+  checked_in_at: string;
+  checked_out_at: string | null;
+  archived_at: string | null;
+};
+
+type DurationUpdate = { visitId: number; durationMinutes: number };
+
+const LUNCH_START_MINUTE = 11 * 60 + 45;
+const LUNCH_END_MINUTE = 13 * 60 + 40;
+const MAX_DURATION_MINUTES = 1440;
+const MAX_BATCH_VISITS = 200;
+
+type Handler = (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
+type Route = { GET?: Handler; POST?: Handler; error: string };
+
+// Every staff route lives here. Anything else falls through to the kiosk and library app.
+const ROUTES: Record<string, Route> = {
+  "/api/library/admin-overview": { GET: (_request, env) => handleOverview(env), error: "Something went wrong." },
+  "/api/library/admin-students": { GET: handleStudents, POST: handleSaveStudent, error: "Something went wrong." },
+  "/api/library/admin-student": { GET: handleStudentDetail, error: "Something went wrong." },
+  "/api/library/admin-history": { GET: handleHistory, error: "Something went wrong." },
+  "/api/library/admin-archive-visit": { POST: handleArchiveVisit, error: "Something went wrong." },
+  "/api/library/admin-stats": { GET: handleStats, error: "Could not calculate library statistics." },
+  "/api/library/admin-update-visit-duration": { POST: handleUpdateVisitDuration, error: "Could not update that visit duration." },
+  "/api/library/admin-update-visit-durations": { POST: handleUpdateVisitDurations, error: "Could not update those visit durations." },
+  "/api/library/admin-clear-with-durations": { POST: handleClearWithDurations, error: "Could not check everyone out." },
+};
+
 export default {
   async fetch(request, env, ctx): Promise<Response> {
-    const url = new URL(request.url);
-    const pathname = normalizePath(url.pathname);
+    const pathname = normalizePath(new URL(request.url).pathname);
+    if (!pathname.startsWith("/api/library/admin-")) return libraryApp.fetch(request, env, ctx);
+    if (!isStaffAuthorized(request)) return json({ error: "Unauthorized." }, 401);
 
-    if (pathname.startsWith("/api/library/admin-")) {
-      if (!isStaffAuthorized(request)) return json({ error: "Unauthorized." }, 401);
+    const route = ROUTES[pathname];
+    if (!route) return libraryApp.fetch(request, env, ctx);
+    const handler = request.method === "GET" ? route.GET : request.method === "POST" ? route.POST : undefined;
+    if (!handler) return methodNotAllowed((["GET", "POST"] as const).filter((method) => route[method]));
 
-      try {
-        await ensureVisitArchiveColumns(env);
-        if (pathname === "/api/library/admin-overview") {
-          return request.method === "GET" ? handleOverview(env) : methodNotAllowed(["GET"]);
-        }
-        if (pathname === "/api/library/admin-students") {
-          if (request.method === "GET") return handleStudents(request, env);
-          if (request.method === "POST") return handleSaveStudent(request, env);
-          return methodNotAllowed(["GET", "POST"]);
-        }
-        if (pathname === "/api/library/admin-student") {
-          return request.method === "GET" ? handleStudentDetail(request, env) : methodNotAllowed(["GET"]);
-        }
-        if (pathname === "/api/library/admin-history") {
-          return request.method === "GET" ? handleHistory(request, env) : methodNotAllowed(["GET"]);
-        }
-        if (pathname === "/api/library/admin-archive-visit") {
-          return request.method === "POST" ? handleArchiveVisit(request, env) : methodNotAllowed(["POST"]);
-        }
-      } catch (error) {
-        console.error(JSON.stringify({ event: "library_admin_error", pathname, error: String(error) }));
-        return json({ error: "Something went wrong." }, 500);
-      }
+    try {
+      await ensureVisitArchiveColumns(env);
+      return await handler(request, env, ctx);
+    } catch (error) {
+      console.error(JSON.stringify({ event: "library_admin_error", pathname, error: String(error) }));
+      return json({ error: route.error }, 500);
     }
-
-    return libraryApp.fetch(request, env, ctx);
   },
 
   async scheduled(controller, env, ctx): Promise<void> {
@@ -199,12 +231,37 @@ async function handleStudentDetail(request: Request, env: Env): Promise<Response
 
   if (!student) return json({ error: "Student was not found." }, 404);
 
-  const recent = await env.SIGNAGE_DB.prepare(
-    `${historySelectSql()} WHERE v.student_row_id = ? AND v.archived_at IS NULL ORDER BY v.checked_in_at DESC LIMIT 8`
-  ).bind(id).all<HistoryRow>();
+  const [recent, time] = await Promise.all([
+    env.SIGNAGE_DB.prepare(
+      `${historySelectSql()} WHERE v.student_row_id = ? AND v.archived_at IS NULL ORDER BY v.checked_in_at DESC LIMIT 8`
+    ).bind(id).all<HistoryRow>(),
+    env.SIGNAGE_DB.prepare(
+      `SELECT
+         COALESCE(SUM(CASE
+           WHEN checked_out_at IS NOT NULL AND checked_out_at >= checked_in_at
+           THEN (julianday(checked_out_at) - julianday(checked_in_at)) * 1440
+           ELSE 0 END), 0) AS completed_minutes,
+         SUM(CASE WHEN checked_out_at IS NOT NULL AND checked_out_at >= checked_in_at THEN 1 ELSE 0 END) AS completed_count,
+         MAX(CASE WHEN checked_out_at IS NULL THEN checked_in_at ELSE NULL END) AS active_since
+       FROM library_visits
+       WHERE student_row_id = ? AND archived_at IS NULL`
+    ).bind(id).first<StudentTimeRow>(),
+  ]);
+
+  const completedMinutes = Math.max(0, Number(time?.completed_minutes ?? 0));
+  const completedCount = Math.max(0, Number(time?.completed_count ?? 0));
+  const activeSince = time?.active_since ?? null;
+  const activeMinutes = activeSince ? Math.max(0, (Date.now() - new Date(activeSince).getTime()) / 60000) : 0;
 
   return json({
-    student: publicAdminStudent(student),
+    student: {
+      ...publicAdminStudent(student),
+      completedTimeMinutes: round1(completedMinutes),
+      timeSpentMinutes: round1(completedMinutes + activeMinutes),
+      completedVisitCount: completedCount,
+      averageCompletedVisitMinutes: completedCount ? round1(completedMinutes / completedCount) : null,
+      activeSince,
+    },
     recentVisits: recent.results.map(publicHistoryRow),
   });
 }
@@ -365,6 +422,548 @@ async function handleArchiveVisit(request: Request, env: Env): Promise<Response>
   return json({ ok: true, visitId, archived: true, closed: existing.checked_out_at === null });
 }
 
+async function handleStats(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const today = dateInTimezone(new Date());
+  const from = parseDateOnly(url.searchParams.get("from")) ?? today.slice(0, 7) + "-01";
+  const to = parseDateOnly(url.searchParams.get("to")) ?? today;
+  if (from > to) return json({ error: "Start date must be before end date." }, 400);
+  const days = daysBetween(from, to) + 1;
+  if (days > 800) return json({ error: "Date range is too large." }, 400);
+
+  const startIso = localDateStartIso(from);
+  const endIso = localDateStartIso(addDateOnly(to, 1));
+  const comparison = comparisonRange(from, to);
+  const schoolStart = schoolYearStartFor(to);
+  const statVisitSql = `SELECT v.id, v.student_row_id, v.student_id, s.first_name, s.last_name, s.grade,
+         v.reason, v.checked_in_at, v.checked_out_at
+       FROM library_visits v
+       JOIN library_students s ON s.id = v.student_row_id`;
+
+  const [visitsResult, overlapResult, firstResult, previousCount, schoolVisitsResult] = await Promise.all([
+    env.SIGNAGE_DB.prepare(
+      `${statVisitSql} WHERE v.checked_in_at >= ? AND v.checked_in_at < ? AND v.archived_at IS NULL ORDER BY v.checked_in_at ASC`
+    ).bind(startIso, endIso).all<StatVisitRow>(),
+    env.SIGNAGE_DB.prepare(
+      `${statVisitSql} WHERE v.checked_in_at < ? AND (v.checked_out_at IS NULL OR v.checked_out_at >= ?) AND v.archived_at IS NULL ORDER BY v.checked_in_at ASC`
+    ).bind(endIso, startIso).all<StatVisitRow>(),
+    env.SIGNAGE_DB.prepare(
+      `SELECT student_row_id, MIN(checked_in_at) AS first_seen FROM library_visits WHERE archived_at IS NULL GROUP BY student_row_id`
+    ).all<{ student_row_id: number; first_seen: string }>(),
+    env.SIGNAGE_DB.prepare(
+      "SELECT COUNT(*) AS count FROM library_visits WHERE checked_in_at >= ? AND checked_in_at < ? AND archived_at IS NULL"
+    ).bind(localDateStartIso(comparison.from), localDateStartIso(addDateOnly(comparison.to, 1))).first<{ count: number }>(),
+    env.SIGNAGE_DB.prepare(
+      `${statVisitSql} WHERE v.checked_in_at >= ? AND v.checked_in_at < ? AND v.archived_at IS NULL ORDER BY v.checked_in_at ASC`
+    ).bind(localDateStartIso(schoolStart), endIso).all<StatVisitRow>(),
+  ]);
+
+  const visits = visitsResult.results;
+  const overlaps = overlapResult.results;
+  const schoolVisits = schoolVisitsResult.results;
+  const firstSeen = new Map(firstResult.results.map((row) => [row.student_row_id, row.first_seen]));
+
+  const visitCount = visits.length;
+  const studentVisits = new Map<number, StatVisitRow[]>();
+  const dayCounts = new Map<string, number>();
+  const weekdayCounts = new Map<string, number>();
+  const hourCounts = new Map<number, number>();
+  const reasonCounts = new Map<string, number>();
+  const gradeCounts = new Map<string, number>();
+  const daypartReasons = new Map<string, Map<string, number>>();
+  const exactDurations: number[] = [];
+  const lunchCheckIns: StatVisitRow[] = [];
+  const lunchDurations: number[] = [];
+
+  for (const visit of visits) {
+    const list = studentVisits.get(visit.student_row_id) ?? [];
+    list.push(visit);
+    studentVisits.set(visit.student_row_id, list);
+
+    const parts = zonedParts(visit.checked_in_at);
+    increment(dayCounts, parts.date);
+    increment(weekdayCounts, parts.weekday);
+    increment(hourCounts, parts.hour);
+    const reason = visit.reason || "Other";
+    increment(reasonCounts, reason);
+    increment(gradeCounts, visit.grade || "Not set");
+    const daypart = parts.hour < 11 ? "Morning" : parts.hour < 14 ? "Midday" : "Afternoon";
+    const daypartMap = daypartReasons.get(daypart) ?? new Map<string, number>();
+    increment(daypartMap, reason);
+    daypartReasons.set(daypart, daypartMap);
+
+    const minutes = visit.checked_out_at ? durationMinutes(visit.checked_in_at, visit.checked_out_at) : null;
+    if (minutes !== null) exactDurations.push(minutes);
+
+    // Lunch is defined by the clock, not the reason students pick at the kiosk.
+    const minuteOfDay = parts.hour * 60 + parts.minute;
+    if (minuteOfDay >= LUNCH_START_MINUTE && minuteOfDay < LUNCH_END_MINUTE) {
+      lunchCheckIns.push(visit);
+      if (minutes !== null) lunchDurations.push(minutes);
+    }
+  }
+
+  exactDurations.sort((a, b) => a - b);
+  lunchDurations.sort((a, b) => a - b);
+  const completedDurations = exactDurations.map((minutes) => Math.round(minutes));
+
+  const uniqueStudents = studentVisits.size;
+  let returningStudents = 0;
+  let repeatVisitors = 0;
+  let regularCount = 0;
+  let fiveDayVisitors = 0;
+  const regulars = Array.from(studentVisits.entries()).map(([studentRowId, rows]) => {
+    const daysVisited = new Set(rows.map((row) => zonedParts(row.checked_in_at).date)).size;
+    const first = firstSeen.get(studentRowId) ?? rows[0]?.checked_in_at;
+    if (first && first < startIso) returningStudents += 1;
+    if (rows.length >= 2) repeatVisitors += 1;
+    if (rows.length >= 5) regularCount += 1;
+    if (daysVisited >= 5) fiveDayVisitors += 1;
+    const sample = rows[0];
+    return {
+      studentRowId,
+      studentId: sample?.student_id ?? "",
+      firstName: sample?.first_name ?? "",
+      lastName: sample?.last_name ?? "",
+      grade: sample?.grade ?? null,
+      visits: rows.length,
+      daysVisited,
+    };
+  }).sort((a, b) => b.visits - a.visits || b.daysVisited - a.daysVisited || a.lastName.localeCompare(b.lastName));
+
+  // Weekdays are averaged per occurrence so a range with three Mondays and two Fridays compares fairly.
+  const weekdayTotals = new Map<string, number>();
+  const weekdayOccurrences = new Map<string, number>();
+  for (let date = from; date <= to; date = addDateOnly(date, 1)) {
+    const weekday = weekdayLabel(date);
+    increment(weekdayOccurrences, weekday);
+    weekdayTotals.set(weekday, (weekdayTotals.get(weekday) ?? 0) + (dayCounts.get(date) ?? 0));
+  }
+  const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((label) => {
+    const occurrences = weekdayOccurrences.get(label) ?? 0;
+    const total = weekdayTotals.get(label) ?? 0;
+    return { label, visits: occurrences ? round1(total / occurrences) : 0, totalVisits: total, occurrences };
+  });
+  const busiestWeekday = weekdays
+    .filter((row) => row.occurrences > 0)
+    .sort((a, b) => b.visits - a.visits || b.totalVisits - a.totalVisits)[0];
+
+  const dailyLunchPeaks: number[] = [];
+  let peakLunchOccupancy = 0;
+  for (let date = from; date <= to; date = addDateOnly(date, 1)) {
+    const peak = peakConcurrent(overlaps, localDateTimeMs(date, 11, 45), localDateTimeMs(date, 13, 40));
+    peakLunchOccupancy = Math.max(peakLunchOccupancy, peak);
+    if (peak > 0) dailyLunchPeaks.push(peak);
+  }
+
+  const busiestDateEntry = maxEntry(dayCounts);
+  const favoriteReasonEntry = maxEntry(reasonCounts);
+  const topGradeEntry = maxEntry(gradeCounts, (key) => key !== "Not set");
+  const busiestHourEntry = maxEntry(hourCounts);
+  const quietestHourEntry = minPositiveEntry(hourCounts);
+  const previousVisits = previousCount?.count ?? 0;
+  const averageDuration = average(completedDurations);
+  const milestones = buildMilestones(schoolVisits);
+
+  return json({
+    range: { from, to, days },
+    summary: {
+      visits: visitCount,
+      uniqueStudents,
+      averageDailyVisits: round1(dayCounts.size ? visitCount / dayCounts.size : 0),
+      peakOccupancy: peakConcurrent(overlaps, new Date(startIso).getTime(), new Date(endIso).getTime()),
+      averageDurationMinutes: averageDuration === null ? null : round1(averageDuration),
+      medianDurationMinutes: median(completedDurations),
+      previousVisits,
+      visitChange: visitCount - previousVisits,
+      comparisonLabel: comparison.label,
+    },
+    visitors: {
+      returningStudents,
+      firstTimeStudents: Math.max(0, uniqueStudents - returningStudents),
+      returningRate: percentage(returningStudents, uniqueStudents),
+      repeatVisitors,
+      repeatRate: percentage(repeatVisitors, uniqueStudents),
+      regularCount,
+      fiveDayVisitors,
+      regulars: regulars.filter((row) => row.visits >= 5).slice(0, 10),
+    },
+    patterns: {
+      busiestDate: busiestDateEntry ? { date: busiestDateEntry[0], visits: busiestDateEntry[1] } : null,
+      busiestWeekday: busiestWeekday
+        ? { weekday: busiestWeekday.label, visits: busiestWeekday.totalVisits, averageVisits: busiestWeekday.visits }
+        : null,
+      favoriteReason: favoriteReasonEntry
+        ? { reason: favoriteReasonEntry[0], visits: favoriteReasonEntry[1], share: percentage(favoriteReasonEntry[1], visitCount) }
+        : null,
+      topGrade: topGradeEntry ? { grade: topGradeEntry[0], visits: topGradeEntry[1] } : null,
+      busiestHour: busiestHourEntry ? { hour: busiestHourEntry[0], visits: busiestHourEntry[1] } : null,
+      quietestActiveHour: quietestHourEntry ? { hour: quietestHourEntry[0], visits: quietestHourEntry[1] } : null,
+      rushHour: busiestThirtyMinutes(visits),
+      longestCompletedVisitMinutes: completedDurations.length ? Math.max(...completedDurations) : null,
+      reasonByDaypart: ["Morning", "Midday", "Afternoon"].map((daypart) => {
+        const top = maxEntry(daypartReasons.get(daypart) ?? new Map<string, number>());
+        return top ? { daypart, reason: top[0], visits: top[1] } : { daypart, reason: null, visits: 0 };
+      }),
+      durationMiddle50: exactDurations.length
+        ? { lowMinutes: round1(percentile(exactDurations, 0.25)), highMinutes: round1(percentile(exactDurations, 0.75)) }
+        : null,
+      durationP90Minutes: exactDurations.length ? round1(percentile(exactDurations, 0.9)) : null,
+    },
+    lunch: {
+      windowLabel: "11:45 AM–1:40 PM",
+      visits: lunchCheckIns.length,
+      peakOccupancy: peakLunchOccupancy,
+      typicalPeakOccupancy: dailyLunchPeaks.length ? round1(average(dailyLunchPeaks) ?? 0) : null,
+      medianDurationMinutes: lunchDurations.length ? round1(percentile(lunchDurations, 0.5)) : null,
+      rushWindow: busiestClockWindow(lunchCheckIns, LUNCH_START_MINUTE, LUNCH_END_MINUTE, 30),
+    },
+    traffic: buildTrafficSeries(from, to, dayCounts),
+    hourly: buildHourlySeries(hourCounts),
+    weekdays,
+    reasons: Array.from(reasonCounts.entries())
+      .map(([label, count]) => ({ label, visits: count }))
+      .sort((a, b) => b.visits - a.visits || a.label.localeCompare(b.label)),
+    grades: ["9", "10", "11", "12", "Not set"]
+      .map((label) => ({ label, visits: gradeCounts.get(label) ?? 0 }))
+      .filter((row) => row.visits > 0),
+    schoolYear: {
+      start: schoolStart,
+      through: to,
+      visits: schoolVisits.length,
+      uniqueStudents: new Set(schoolVisits.map((visit) => visit.student_row_id)).size,
+      milestones: milestones.reached.slice(-6).reverse(),
+      nextVisitMilestone: milestones.nextVisit,
+      nextUniqueMilestone: milestones.nextUnique,
+    },
+  });
+}
+
+/** Picks the most meaningful earlier period to compare a range against. */
+function comparisonRange(from: string, to: string): { from: string; to: string; label: string } {
+  const days = daysBetween(from, to) + 1;
+  const [year, month, day] = from.split("-").map(Number);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+
+  if (days === 1) {
+    const date = addDateOnly(from, -7);
+    return { from: date, to: date, label: "same weekday last week" };
+  }
+  if (weekday === 1 && days <= 7) {
+    return { from: addDateOnly(from, -7), to: addDateOnly(to, -7), label: "same days last week" };
+  }
+  if (from.slice(8, 10) === "01" && days <= 31) {
+    const previousMonthStart = shiftMonthStart(from, -1);
+    return { from: previousMonthStart, to: addDateOnly(previousMonthStart, days - 1), label: "same period last month" };
+  }
+  if (from.slice(5) === "08-01" && days <= 366) {
+    return { from: shiftYear(from, -1), to: shiftYear(to, -1), label: "same period last school year" };
+  }
+  const previousTo = addDateOnly(from, -1);
+  return { from: addDateOnly(previousTo, -(days - 1)), to: previousTo, label: "previous period" };
+}
+
+function buildTrafficSeries(from: string, to: string, counts: Map<string, number>) {
+  if (daysBetween(from, to) + 1 <= 62) {
+    const points: Array<{ date: string; label: string; visits: number }> = [];
+    for (let date = from; date <= to; date = addDateOnly(date, 1)) {
+      points.push({ date, label: shortDate(date), visits: counts.get(date) ?? 0 });
+    }
+    return { granularity: "day", points };
+  }
+
+  const buckets = new Map<string, number>();
+  for (let date = from; date <= to; date = addDateOnly(date, 1)) {
+    const week = mondayOf(date);
+    buckets.set(week, (buckets.get(week) ?? 0) + (counts.get(date) ?? 0));
+  }
+  return {
+    granularity: "week",
+    points: Array.from(buckets.entries()).map(([date, visits]) => ({ date, label: "Week of " + shortDate(date), visits })),
+  };
+}
+
+function buildHourlySeries(counts: Map<number, number>) {
+  if (!counts.size) return [];
+  const observed = Array.from(counts.keys()).filter((hour) => hour >= 5 && hour <= 20);
+  const min = observed.length ? Math.max(5, Math.min(...observed)) : 8;
+  const max = observed.length ? Math.min(20, Math.max(...observed)) : 15;
+  const out = [];
+  for (let hour = min; hour <= max; hour += 1) out.push({ hour, label: hourLabel(hour), visits: counts.get(hour) ?? 0 });
+  return out;
+}
+
+/** Most visits open at the same moment within [start, end). Open visits run until now. */
+function peakConcurrent(visits: StatVisitRow[], start: number, end: number): number {
+  const now = Date.now();
+  const events: Array<[number, number]> = [];
+  for (const visit of visits) {
+    const rawStart = new Date(visit.checked_in_at).getTime();
+    const rawEnd = visit.checked_out_at ? new Date(visit.checked_out_at).getTime() : now;
+    if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) continue;
+    const a = Math.max(start, rawStart);
+    const b = Math.min(end, rawEnd);
+    if (b <= a) continue;
+    events.push([a, 1], [b, -1]);
+  }
+  events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let current = 0;
+  let peak = 0;
+  for (const [, delta] of events) {
+    current += delta;
+    peak = Math.max(peak, current);
+  }
+  return peak;
+}
+
+function busiestThirtyMinutes(visits: StatVisitRow[]) {
+  const stamps = visits.map((visit) => new Date(visit.checked_in_at).getTime()).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!stamps.length) return null;
+  let bestStart = 0;
+  let bestCount = 0;
+  let left = 0;
+  for (let right = 0; right < stamps.length; right += 1) {
+    while (stamps[right] - stamps[left] >= 30 * 60 * 1000) left += 1;
+    const count = right - left + 1;
+    if (count > bestCount) {
+      bestCount = count;
+      bestStart = stamps[left];
+    }
+  }
+  return {
+    startAt: new Date(bestStart).toISOString(),
+    endAt: new Date(bestStart + 30 * 60 * 1000).toISOString(),
+    checkIns: bestCount,
+    perMinute: round1(bestCount / 30),
+  };
+}
+
+/** The busiest fixed-length stretch of the clock, stepping five minutes at a time. */
+function busiestClockWindow(visits: StatVisitRow[], startMinute: number, endMinute: number, windowMinutes: number) {
+  if (!visits.length) return null;
+  const minutes = visits.map((visit) => {
+    const parts = zonedParts(visit.checked_in_at);
+    return { date: parts.date, minute: parts.hour * 60 + parts.minute };
+  });
+  const activeDays = new Set(minutes.map((entry) => entry.date)).size;
+  let bestStart = startMinute;
+  let bestCount = -1;
+  for (let start = startMinute; start + windowMinutes <= endMinute; start += 5) {
+    const end = start + windowMinutes;
+    const count = minutes.filter((entry) => entry.minute >= start && entry.minute < end).length;
+    if (count > bestCount) {
+      bestCount = count;
+      bestStart = start;
+    }
+  }
+  return {
+    startMinute: bestStart,
+    endMinute: bestStart + windowMinutes,
+    checkIns: Math.max(0, bestCount),
+    checkInsPerActiveDay: activeDays ? round1(Math.max(0, bestCount) / activeDays) : 0,
+  };
+}
+
+function buildMilestones(visits: StatVisitRow[]) {
+  const visitTargets = [100, 250, 500, 1000, 2500, 5000, 10000, 25000];
+  const uniqueTargets = [50, 100, 250, 500, 750, 1000, 1500, 2000];
+  const reached: Array<{ type: "visits" | "students"; value: number; reachedAt: string }> = [];
+  const seen = new Set<number>();
+  let visitTargetIndex = 0;
+  let uniqueTargetIndex = 0;
+
+  for (let i = 0; i < visits.length; i += 1) {
+    const visit = visits[i];
+    seen.add(visit.student_row_id);
+    while (visitTargetIndex < visitTargets.length && i + 1 >= visitTargets[visitTargetIndex]) {
+      reached.push({ type: "visits", value: visitTargets[visitTargetIndex], reachedAt: visit.checked_in_at });
+      visitTargetIndex += 1;
+    }
+    while (uniqueTargetIndex < uniqueTargets.length && seen.size >= uniqueTargets[uniqueTargetIndex]) {
+      reached.push({ type: "students", value: uniqueTargets[uniqueTargetIndex], reachedAt: visit.checked_in_at });
+      uniqueTargetIndex += 1;
+    }
+  }
+
+  return {
+    reached: reached.sort((a, b) => a.reachedAt.localeCompare(b.reachedAt)),
+    nextVisit: visitTargets.find((target) => target > visits.length) ?? nextRoundMilestone(visits.length, 5000),
+    nextUnique: uniqueTargets.find((target) => target > seen.size) ?? nextRoundMilestone(seen.size, 500),
+  };
+}
+
+function nextRoundMilestone(value: number, step: number): number {
+  return Math.max(step, Math.ceil((value + 1) / step) * step);
+}
+
+async function handleUpdateVisitDuration(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
+
+  const visitId = Number(body.visitId);
+  const minutes = Number(body.durationMinutes);
+  if (!Number.isInteger(visitId) || visitId < 1) return json({ error: "Invalid visit." }, 400);
+  if (!Number.isInteger(minutes) || minutes < 0 || minutes > MAX_DURATION_MINUTES) {
+    return json({ error: `Duration must be a whole number of minutes between 0 and ${MAX_DURATION_MINUTES}.` }, 400);
+  }
+
+  const existing = await env.SIGNAGE_DB.prepare(
+    "SELECT id, checked_in_at, checked_out_at, archived_at FROM library_visits WHERE id = ?"
+  ).bind(visitId).first<EditableVisitRow>();
+  if (!existing) return json({ error: "That visit was not found." }, 404);
+  if (existing.archived_at !== null) return json({ error: "Restore this visit before editing its duration." }, 409);
+  if (existing.checked_out_at === null) return json({ error: "Check this student out before editing the visit duration." }, 409);
+
+  const checkedOutMs = checkedInMs(existing) + minutes * 60_000;
+  if (checkedOutMs > Date.now()) return json({ error: "Duration cannot put the checkout time in the future." }, 400);
+  const checkedOutAt = new Date(checkedOutMs).toISOString();
+
+  const result = await moveCheckoutStatement(env, visitId, checkedOutAt).run();
+  if ((result.meta.changes ?? 0) !== 1) return json({ error: "That visit changed before it could be updated. Refresh and try again." }, 409);
+
+  return json({ ok: true, visitId, durationMinutes: minutes, checkedOutAt });
+}
+
+async function handleUpdateVisitDurations(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!isRecord(body) || !Array.isArray(body.updates)) return json({ error: "Invalid request body." }, 400);
+
+  const updates = parseDurationUpdates(body.updates);
+  if (updates === null) {
+    return json({ error: `Each duration must be a whole number of minutes between 0 and ${MAX_DURATION_MINUTES}.` }, 400);
+  }
+  if (updates.length === 0) return json({ error: "Select at least one visit to update." }, 400);
+  if (updates.length > MAX_BATCH_VISITS) return json({ error: `Select ${MAX_BATCH_VISITS} visits or fewer at a time.` }, 400);
+
+  const placeholders = updates.map(() => "?").join(",");
+  const rows = await env.SIGNAGE_DB.prepare(
+    `SELECT id, checked_in_at, checked_out_at, archived_at FROM library_visits WHERE id IN (${placeholders})`
+  ).bind(...updates.map((update) => update.visitId)).all<EditableVisitRow>();
+  const existing = new Map(rows.results.map((row) => [row.id, row]));
+  const now = Date.now();
+  const statements: D1PreparedStatement[] = [];
+
+  // Everything is checked before anything is written, so a stale row in the
+  // selection cannot leave the rest of the batch half applied.
+  for (const update of updates) {
+    const visit = existing.get(update.visitId);
+    if (!visit) return json({ error: "One of those visits was not found. Refresh and try again." }, 404);
+    if (visit.archived_at !== null) return json({ error: "Restore archived visits before editing their duration." }, 409);
+    if (visit.checked_out_at === null) return json({ error: "Check these students out before editing their visit duration." }, 409);
+
+    const checkedOutMs = checkedInMs(visit) + update.durationMinutes * 60_000;
+    if (checkedOutMs > now) return json({ error: "A duration cannot put the checkout time in the future." }, 400);
+    statements.push(moveCheckoutStatement(env, update.visitId, new Date(checkedOutMs).toISOString()));
+  }
+
+  const results = await env.SIGNAGE_DB.batch(statements);
+  const updated = results.reduce((total, result) => total + (result.meta.changes ?? 0), 0);
+  if (updated !== updates.length) {
+    return json({ error: "Some of those visits changed before they could be updated. Refresh and try again." }, 409);
+  }
+
+  return json({ ok: true, updated });
+}
+
+async function handleClearWithDurations(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
+  if (body.adjustments !== undefined && body.adjustments !== null && !Array.isArray(body.adjustments)) {
+    return json({ error: "Invalid request body." }, 400);
+  }
+
+  const adjustments = Array.isArray(body.adjustments) ? parseDurationUpdates(body.adjustments) : [];
+  if (adjustments === null) {
+    return json({ error: `Each corrected visit needs a whole number of minutes between 0 and ${MAX_DURATION_MINUTES}.` }, 400);
+  }
+  if (adjustments.length > MAX_BATCH_VISITS) {
+    return json({ error: "Too many visits were sent at once. Refresh and try again." }, 400);
+  }
+
+  const startedAt = new Map<number, string>();
+  if (adjustments.length) {
+    const placeholders = adjustments.map(() => "?").join(",");
+    const rows = await env.SIGNAGE_DB.prepare(
+      `SELECT id, checked_in_at FROM library_visits
+       WHERE id IN (${placeholders}) AND checked_out_at IS NULL AND archived_at IS NULL`
+    ).bind(...adjustments.map((adjustment) => adjustment.visitId)).all<{ id: number; checked_in_at: string }>();
+    for (const row of rows.results) startedAt.set(row.id, row.checked_in_at);
+  }
+
+  const now = Date.now();
+  const updates: { visitId: number; checkedOutAt: string }[] = [];
+  for (const adjustment of adjustments) {
+    const start = startedAt.get(adjustment.visitId);
+    // A visit checked out or archived while the librarian was reviewing is skipped;
+    // the clear below still leaves the roster empty.
+    if (!start) continue;
+    const startMs = new Date(start).getTime();
+    if (!Number.isFinite(startMs)) continue;
+    const checkedOutMs = startMs + adjustment.durationMinutes * 60_000;
+    if (checkedOutMs > now) return json({ error: "A corrected duration cannot put the checkout time in the future." }, 400);
+    updates.push({ visitId: adjustment.visitId, checkedOutAt: new Date(checkedOutMs).toISOString() });
+  }
+
+  // Clear through the library app so every visit gets its Google Sheets event,
+  // then move the checkout times that were corrected.
+  const cleared = await libraryApp.fetch(clearRequest(request), env, ctx);
+  if (!cleared.ok) return cleared;
+  const clearedBody = (await cleared.json().catch(() => ({}))) as Record<string, unknown>;
+
+  if (updates.length) {
+    await env.SIGNAGE_DB.batch(updates.map((update) => moveCheckoutStatement(env, update.visitId, update.checkedOutAt)));
+  }
+
+  return json({ ...clearedBody, ok: true, adjusted: updates.length });
+}
+
+function parseDurationUpdates(value: unknown[]): DurationUpdate[] | null {
+  const byVisitId = new Map<number, DurationUpdate>();
+  for (const entry of value) {
+    if (!isRecord(entry)) return null;
+    const visitId = Number(entry.visitId);
+    const minutes = Number(entry.durationMinutes);
+    if (!Number.isInteger(visitId) || visitId < 1) return null;
+    if (!Number.isInteger(minutes) || minutes < 0 || minutes > MAX_DURATION_MINUTES) return null;
+    byVisitId.set(visitId, { visitId, durationMinutes: minutes });
+  }
+  return [...byVisitId.values()];
+}
+
+function checkedInMs(visit: EditableVisitRow): number {
+  const value = new Date(visit.checked_in_at).getTime();
+  if (!Number.isFinite(value)) throw new Error("Visit has an invalid check-in timestamp.");
+  return value;
+}
+
+function moveCheckoutStatement(env: Env, visitId: number, checkedOutAt: string): D1PreparedStatement {
+  return env.SIGNAGE_DB.prepare(
+    `UPDATE library_visits
+     SET checked_out_at = ?
+     WHERE id = ? AND archived_at IS NULL AND checked_out_at IS NOT NULL`
+  ).bind(checkedOutAt, visitId);
+}
+
+type LibraryRequest = Parameters<NonNullable<(typeof libraryApp)["fetch"]>>[0];
+
+function clearRequest(request: Request): LibraryRequest {
+  const target = new URL(request.url);
+  target.pathname = "/api/library/clear";
+  target.search = "";
+
+  const headers = new Headers({ "Content-Type": "application/json; charset=utf-8" });
+  for (const name of ["CF-Access-Authenticated-User-Email", "Cf-Access-Jwt-Assertion", "CF-Ray"]) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+
+  return new Request(target.toString(), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ method: "clear_all" }),
+  }) as LibraryRequest;
+}
+
 function getActor(request: Request): string {
   return request.headers.get("CF-Access-Authenticated-User-Email")?.trim() || "Library staff";
 }
@@ -498,10 +1097,15 @@ function addDateOnly(value: string, days: number): string {
 }
 
 function localDateStartIso(value: string): string {
+  return new Date(localDateTimeMs(value, 0, 0)).toISOString();
+}
+
+/** Epoch milliseconds for a wall-clock time on a calendar date in the library's timezone. */
+function localDateTimeMs(value: string, hour: number, minute: number): number {
   const [year, month, day] = value.split("-").map(Number);
-  const utcWallClock = Date.UTC(year, month - 1, day);
+  const utcWallClock = Date.UTC(year, month - 1, day, hour, minute);
   const offsetMinutes = timezoneOffsetMinutes(new Date(utcWallClock));
-  return new Date(utcWallClock - offsetMinutes * 60000).toISOString();
+  return utcWallClock - offsetMinutes * 60000;
 }
 
 function timezoneOffsetMinutes(value: Date): number {
@@ -513,4 +1117,120 @@ function timezoneOffsetMinutes(value: Date): number {
   if (!match) return 0;
   const sign = match[1] === "+" ? 1 : -1;
   return sign * (Number(match[2]) * 60 + Number(match[3] ?? 0));
+}
+
+const zonedFormat = new Intl.DateTimeFormat("en-US", {
+  timeZone: TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  weekday: "long",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+function zonedParts(value: string): { date: string; weekday: string; hour: number; minute: number } {
+  const map = Object.fromEntries(zonedFormat.formatToParts(new Date(value)).map((part) => [part.type, part.value]));
+  return { date: `${map.year}-${map.month}-${map.day}`, weekday: map.weekday, hour: Number(map.hour), minute: Number(map.minute) };
+}
+
+function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(to + "T00:00:00Z") - Date.parse(from + "T00:00:00Z")) / 86400000);
+}
+
+function weekdayLabel(date: string): string {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+function shortDate(value: string): string {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+function hourLabel(hour: number): string {
+  return `${hour % 12 || 12} ${hour >= 12 ? "PM" : "AM"}`;
+}
+
+function mondayOf(value: string): string {
+  const [year, month, day] = value.split("-").map(Number);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  return addDateOnly(value, weekday === 0 ? -6 : 1 - weekday);
+}
+
+function schoolYearStartFor(value: string): string {
+  const [year, month] = value.split("-").map(Number);
+  return `${month >= 8 ? year : year - 1}-08-01`;
+}
+
+function shiftMonthStart(value: string, delta: number): string {
+  const [year, month] = value.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1 + delta, 1)).toISOString().slice(0, 10);
+}
+
+function shiftYear(value: string, delta: number): string {
+  const [year, month, day] = value.split("-").map(Number);
+  const targetYear = year + delta;
+  const lastDay = new Date(Date.UTC(targetYear, month, 0)).getUTCDate();
+  return new Date(Date.UTC(targetYear, month - 1, Math.min(day, lastDay))).toISOString().slice(0, 10);
+}
+
+/** Exact minutes between two timestamps, or null when either is invalid or the end comes first. */
+function durationMinutes(start: string, end: string): number | null {
+  const a = new Date(start).getTime();
+  const b = new Date(end).getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return null;
+  return (b - a) / 60000;
+}
+
+function average(values: number[]): number | null {
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+}
+
+function median(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+}
+
+/** Linear-interpolated percentile of an ascending list. */
+function percentile(sorted: number[], p: number): number {
+  if (!sorted.length) return 0;
+  const position = (sorted.length - 1) * p;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return sorted[lower];
+  return sorted[lower] * (upper - position) + sorted[upper] * (position - lower);
+}
+
+function percentage(part: number, whole: number): number {
+  return whole ? round1((part / whole) * 100) : 0;
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function increment<K>(map: Map<K, number>, key: K) {
+  map.set(key, (map.get(key) ?? 0) + 1);
+}
+
+function maxEntry<K>(map: Map<K, number>, include: (key: K) => boolean = () => true): [K, number] | null {
+  let best: [K, number] | null = null;
+  for (const entry of map.entries()) {
+    if (!include(entry[0])) continue;
+    if (!best || entry[1] > best[1]) best = entry;
+  }
+  return best;
+}
+
+function minPositiveEntry<K>(map: Map<K, number>): [K, number] | null {
+  let best: [K, number] | null = null;
+  for (const entry of map.entries()) {
+    if (entry[1] <= 0) continue;
+    if (!best || entry[1] < best[1]) best = entry;
+  }
+  return best;
 }

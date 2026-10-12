@@ -127,14 +127,7 @@ const HTML_HEADERS = {
 export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
-    let pathname = normalizePath(url.pathname);
-
-    const manageApi = pathname === "/library/manage" ? url.searchParams.get("api") : null;
-    if (manageApi && /^[a-z0-9-]+$/.test(manageApi)) {
-      pathname = `/api/library/${manageApi}`;
-    } else if (pathname.startsWith("/library/manage/api/")) {
-      pathname = `/api/library/${pathname.slice("/library/manage/api/".length)}`;
-    }
+    const pathname = normalizePath(url.pathname);
 
     try {
       if (pathname.startsWith("/api/library/")) {
