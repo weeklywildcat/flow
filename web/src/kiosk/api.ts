@@ -63,8 +63,8 @@ export const kioskGet = <T,>(path: string) => request<T>(path, { method: "GET" }
 export type KioskStudent = { studentId: string; firstName: string; lastName: string; grade: string | null }
 
 export type ScanResult =
-  | { mode: "checkout"; student: KioskStudent }
-  | { mode: "checkin"; student: KioskStudent; recentlyCleared?: boolean; reasons: string[] }
+  | { mode: "checkout"; student: KioskStudent; nameCheck?: boolean }
+  | { mode: "checkin"; student: KioskStudent; recentlyCleared?: boolean; nameCheck?: boolean; reasons: string[] }
   | { mode: "new_student"; barcode: string; grades: string[]; reasons: string[] }
 
 export type FunFacts = { visitsThisMonth: number; minutesThisYear: number }

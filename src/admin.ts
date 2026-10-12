@@ -17,6 +17,7 @@ type AdminStudentRow = {
   grade: string | null;
   active: number;
   updated_at: string;
+  name_check_requested_at: string | null;
   visit_count: number;
   last_visit_at: string | null;
 };
@@ -97,6 +98,7 @@ const ROUTES: Record<string, Route> = {
   "/api/library/admin-flagged-visits": { GET: handleFlaggedVisits, error: "Could not load flagged visits." },
   "/api/library/admin-fix-visits": { POST: handleFixVisits, error: "Could not fix those visits." },
   "/api/library/admin-review-flag": { POST: handleReviewFlag, error: "Could not update that visit." },
+  "/api/library/admin-name-check": { POST: handleNameCheck, error: "Could not update that student." },
 };
 
 export default {
@@ -195,6 +197,7 @@ async function handleStudents(request: Request, env: Env): Promise<Response> {
   }
   if (status === "active") where.push("s.active = 1");
   if (status === "inactive") where.push("s.active = 0");
+  if (status === "name-check") where.push("s.name_check_requested_at IS NOT NULL");
 
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const countRow = await env.SIGNAGE_DB.prepare(
@@ -203,7 +206,7 @@ async function handleStudents(request: Request, env: Env): Promise<Response> {
 
   const rows = await env.SIGNAGE_DB.prepare(
     `SELECT
-       s.id, s.student_id, s.barcode, s.first_name, s.last_name, s.grade, s.active, s.updated_at,
+       s.id, s.student_id, s.barcode, s.first_name, s.last_name, s.grade, s.active, s.updated_at, s.name_check_requested_at,
        COUNT(v.id) AS visit_count,
        MAX(v.checked_in_at) AS last_visit_at
      FROM library_students s
@@ -229,7 +232,7 @@ async function handleStudentDetail(request: Request, env: Env): Promise<Response
 
   const student = await env.SIGNAGE_DB.prepare(
     `SELECT
-       s.id, s.student_id, s.barcode, s.first_name, s.last_name, s.grade, s.active, s.updated_at,
+       s.id, s.student_id, s.barcode, s.first_name, s.last_name, s.grade, s.active, s.updated_at, s.name_check_requested_at,
        COUNT(v.id) AS visit_count,
        MAX(v.checked_in_at) AS last_visit_at
      FROM library_students s
@@ -287,7 +290,23 @@ function publicAdminStudent(row: AdminStudentRow) {
     updatedAt: row.updated_at,
     visitCount: row.visit_count ?? 0,
     lastVisitAt: row.last_visit_at,
+    nameCheckRequestedAt: row.name_check_requested_at,
   };
+}
+
+/** Asks the kiosk to have this student re-enter their name the next time they scan, or cancels that. */
+async function handleNameCheck(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
+  const id = Number(body.id);
+  if (!Number.isInteger(id) || id < 1) return json({ error: "Invalid student." }, 400);
+  const requested = body.requested !== false;
+
+  const result = await env.SIGNAGE_DB.prepare("UPDATE library_students SET name_check_requested_at = ? WHERE id = ?")
+    .bind(requested ? new Date().toISOString() : null, id)
+    .run();
+  if ((result.meta.changes ?? 0) !== 1) return json({ error: "Student was not found." }, 404);
+  return json({ ok: true, id, requested });
 }
 
 async function handleSaveStudent(request: Request, env: Env): Promise<Response> {

@@ -8,6 +8,7 @@ The library Worker is intentionally focused on one workflow: recording who is in
 - A known student with no active visit is prompted for a reason and checked in.
 - A known student with an active visit is checked out immediately when they scan again.
 - A new barcode can be saved with the student’s name and grade, then checked in.
+- If a librarian chose **Ask to confirm name** on the student’s profile, the next scan asks them to re-enter their name before continuing. Their answer updates the record and clears the request; **Skip for now** leaves it for the following visit.
 
 The kiosk is built from the same shadcn/ui setup in [`web/src/kiosk`](../web/src/kiosk). Pairing uses a one-time 8-digit PIN from **Devices & data**. Both pages share their JavaScript and CSS from `/library/assets/`, which sits outside the Access-protected `/library/manage` path so the kiosk can load it; the shared files contain no data, and every staff API route still requires Access.
 

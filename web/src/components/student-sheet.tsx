@@ -1,7 +1,7 @@
 import * as React from "react"
 import { toast } from "sonner"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Logout03Icon, PencilEdit02Icon } from "@hugeicons/core-free-icons"
+import { Logout03Icon, PencilEdit02Icon, UserQuestion01Icon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -111,6 +111,21 @@ export function StudentSheet({ student: ref, onClose }: { student: StudentRef | 
       setEditing(false)
       invalidate()
       await load({ id: result.id })
+    } catch (error) {
+      toast.error(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function setNameCheck(requested: boolean) {
+    if (!student) return
+    setBusy(true)
+    try {
+      await post("admin-name-check", { id: student.id, requested })
+      toast.success(requested ? `${student.firstName} will be asked to re-enter their name next time they scan` : "Name check canceled")
+      invalidate()
+      await load({ id: student.id })
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -249,6 +264,22 @@ export function StudentSheet({ student: ref, onClose }: { student: StudentRef | 
             <div className="flex-1 overflow-y-auto">
               {student && detail ? (
                 <div className="flex flex-col gap-6 p-6">
+                  {student.nameCheckRequestedAt ? (
+                    <div className="flex items-center gap-3 rounded-2xl bg-amber-500/10 p-3">
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400">
+                        <HugeiconsIcon icon={UserQuestion01Icon} strokeWidth={2} className="size-4" />
+                      </span>
+                      <div className="min-w-0 flex-1 text-sm">
+                        <p className="font-medium">Name check pending</p>
+                        <p className="text-xs text-muted-foreground">
+                          The kiosk will ask them to re-enter their name at their next scan. Requested {formatDay(student.nameCheckRequestedAt)}.
+                        </p>
+                      </div>
+                      <Button size="sm" variant="ghost" disabled={busy} onClick={() => void setNameCheck(false)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : null}
                   {openVisit ? (
                     <div className="flex items-center gap-3 rounded-2xl bg-primary/10 p-3">
                       <span className="relative flex size-2.5">
@@ -302,7 +333,13 @@ export function StudentSheet({ student: ref, onClose }: { student: StudentRef | 
                 </div>
               )}
             </div>
-            <SheetFooter className="flex-row justify-end border-t">
+            <SheetFooter className="flex-row flex-wrap justify-end border-t">
+              {student && !student.nameCheckRequestedAt ? (
+                <Button variant="outline" disabled={busy} onClick={() => void setNameCheck(true)}>
+                  <HugeiconsIcon icon={UserQuestion01Icon} strokeWidth={2} data-icon="inline-start" />
+                  Ask to confirm name
+                </Button>
+              ) : null}
               <Button variant="outline" disabled={!student} onClick={startEdit}>
                 <HugeiconsIcon icon={PencilEdit02Icon} strokeWidth={2} data-icon="inline-start" />
                 Edit student

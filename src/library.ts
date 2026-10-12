@@ -28,6 +28,7 @@ type StudentRow = {
   last_name: string;
   grade: string | null;
   active: number;
+  name_check_requested_at?: string | null;
 };
 
 type VisitRow = {
@@ -59,6 +60,7 @@ type StudentScanLookupRow = {
   last_name: string;
   grade: string | null;
   active: number;
+  name_check_requested_at: string | null;
   visit_id: number | null;
   visit_student_row_id: number | null;
   visit_reason: string | null;
@@ -126,7 +128,7 @@ export default {
     try {
       if (pathname.startsWith("/api/library/")) {
         await ensureVisitArchiveColumns(env);
-        const kioskAllowed = pathname === "/api/library/scan" || pathname === "/api/library/checkin" || pathname === "/api/library/checkout" || pathname === "/api/library/create-student" || pathname === "/api/library/student-fun-facts" || pathname === "/api/library/kiosk-status";
+        const kioskAllowed = pathname === "/api/library/scan" || pathname === "/api/library/checkin" || pathname === "/api/library/checkout" || pathname === "/api/library/create-student" || pathname === "/api/library/confirm-name" || pathname === "/api/library/student-fun-facts" || pathname === "/api/library/kiosk-status";
         const pairingAllowed = pathname === "/api/library/kiosk-enroll";
         const authorized = pairingAllowed || (kioskAllowed ? await isKioskOrStaffAuthorized(request, env) : isStaffAuthorized(request));
         if (!authorized) {
@@ -152,6 +154,10 @@ export default {
 
       if (pathname === "/api/library/create-student") {
         return request.method === "POST" ? handleCreateStudent(request, env, ctx) : methodNotAllowed(["POST"]);
+      }
+
+      if (pathname === "/api/library/confirm-name") {
+        return request.method === "POST" ? handleConfirmName(request, env, ctx) : methodNotAllowed(["POST"]);
       }
 
       if (pathname === "/api/library/student-fun-facts") {
@@ -237,16 +243,18 @@ async function handleScan(request: Request, env: LibraryEnv, ctx: ExecutionConte
   }
 
   const { student, activeVisit } = scanLookup;
+  // Staff asked for this student to re-enter their name; the kiosk prompts before continuing.
+  const nameCheck = Boolean(student.name_check_requested_at);
 
   if (activeVisit) {
     if (body.autoCheckout === true) {
       const checkedOutAt = new Date().toISOString();
       const updatedVisit = await completeCheckout(env, ctx, activeVisit, "scan_out", getActor(request), checkedOutAt);
       if (!updatedVisit) return json({ error: "The visit was already checked out." }, 409);
-      return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(updatedVisit) });
+      return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(updatedVisit), nameCheck });
     }
 
-    return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(activeVisit) });
+    return json({ mode: "checkout", student: publicStudent(student), visit: visitPayload(activeVisit), nameCheck });
   }
 
   const recentlyCleared = await hasRecentDashboardClear(env, student.id);
@@ -255,8 +263,44 @@ async function handleScan(request: Request, env: LibraryEnv, ctx: ExecutionConte
     mode: "checkin",
     student: publicStudent(student),
     recentlyCleared,
+    nameCheck,
     reasons: REASONS,
   });
+}
+
+async function handleConfirmName(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
+
+  const barcode = normalizeBarcode(body.barcode);
+  const firstName = normalizeString(body.firstName, 80);
+  const lastName = normalizeString(body.lastName, 80);
+  if (!barcode) return json({ error: "Scan a student ID first." }, 400);
+  if (!firstName || !lastName) return json({ error: "Enter your first and last name." }, 400);
+
+  const student = await findStudentByBarcode(env, barcode);
+  if (!student) return json({ error: "Student was not found." }, 404);
+
+  const now = new Date().toISOString();
+  await env.SIGNAGE_DB.prepare(
+    `UPDATE library_students
+     SET first_name = ?, last_name = ?, name_check_requested_at = NULL, updated_at = ?
+     WHERE id = ?`
+  ).bind(firstName, lastName, now, student.id).run();
+
+  const changed = firstName !== student.first_name || lastName !== student.last_name;
+  await queueSheetEvent(env, ctx, {
+    event: "STUDENT_NAME_CONFIRMED",
+    timestamp: now,
+    studentId: student.student_id,
+    firstName,
+    lastName,
+    grade: student.grade,
+    reason: changed ? `Re-entered at the kiosk; was ${student.first_name} ${student.last_name}` : "Confirmed at the kiosk",
+    actor: getActor(request),
+  });
+
+  return json({ ok: true, changed, student: publicStudent({ ...student, first_name: firstName, last_name: lastName }) });
 }
 
 async function handleStudentFunFacts(request: Request, env: LibraryEnv): Promise<Response> {
@@ -753,6 +797,7 @@ async function findStudentAndActiveVisit(env: LibraryEnv, barcode: string): Prom
        s.last_name,
        s.grade,
        s.active,
+       s.name_check_requested_at,
        v.id AS visit_id,
        v.student_row_id AS visit_student_row_id,
        v.reason AS visit_reason,
@@ -777,6 +822,7 @@ async function findStudentAndActiveVisit(env: LibraryEnv, barcode: string): Prom
     last_name: row.last_name,
     grade: row.grade,
     active: row.active,
+    name_check_requested_at: row.name_check_requested_at,
   };
 
   if (row.visit_id === null || row.visit_student_row_id === null || row.visit_reason === null || row.visit_checked_in_at === null) {
@@ -1183,6 +1229,11 @@ async function migrateVisitArchiveColumns(env: LibraryEnv): Promise<void> {
   if (!existing.has("flag_reviewed_at")) {
     statements.push(env.SIGNAGE_DB.prepare("ALTER TABLE library_visits ADD COLUMN flag_reviewed_at TEXT"));
   }
+  // Set when a librarian asks a student to re-enter their name at their next scan.
+  const studentColumns = await env.SIGNAGE_DB.prepare("PRAGMA table_info(library_students)").all<{ name: string }>();
+  if (studentColumns.results.length > 0 && !studentColumns.results.some((column) => column.name === "name_check_requested_at")) {
+    statements.push(env.SIGNAGE_DB.prepare("ALTER TABLE library_students ADD COLUMN name_check_requested_at TEXT"));
+  }
   if (statements.length === 0) return;
   await env.SIGNAGE_DB.batch(statements);
 }
@@ -1198,6 +1249,7 @@ async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
         last_name TEXT NOT NULL,
         grade TEXT,
         active INTEGER NOT NULL DEFAULT 1,
+        name_check_requested_at TEXT,
         updated_at TEXT NOT NULL
       )`
     ),
