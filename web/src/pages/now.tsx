@@ -13,11 +13,14 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { PageBody, StatCard, StudentAvatar, errorMessage, useConfirm } from "@/components/common"
 import { ClearDialog, REVIEW_AFTER_MINUTES } from "@/components/visit-dialogs"
-import { get, post, type CurrentState, type Overview, type Visit } from "@/lib/api"
+import { post, type CurrentState, type Overview, type Visit } from "@/lib/api"
+import { useCachedGet } from "@/lib/cache"
 import { useDashboard } from "@/lib/dashboard"
-import { useNow, useVisibleInterval } from "@/lib/hooks"
+import { useNow } from "@/lib/hooks"
 import { formatAgo, formatDuration, formatElapsed, formatTime, fullName, minutesSince, plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
+
+const NO_PARAMS = {}
 
 /** Matches the server's "needs attention" cutoff for visits nobody closed. */
 const LONG_VISIT_MINUTES = 120
@@ -30,32 +33,24 @@ const SORTS = [
 ]
 
 export function NowPage() {
-  const { dataVersion, invalidate, setCurrentCount, setFlaggedCount, openStudent, setPage } = useDashboard()
+  const { invalidate, setCurrentCount, setFlaggedCount, openStudent, setPage } = useDashboard()
   const confirm = useConfirm()
   const now = useNow(30000)
-  const [current, setCurrent] = React.useState<CurrentState | null>(null)
-  const [overview, setOverview] = React.useState<Overview | null>(null)
   const [query, setQuery] = React.useState("")
   const [sort, setSort] = React.useState<Sort>("recent")
   const [clearOpen, setClearOpen] = React.useState(false)
   const [pending, setPending] = React.useState<Set<number>>(new Set())
 
-  const load = React.useCallback(async () => {
-    try {
-      const [nextCurrent, nextOverview] = await Promise.all([get<CurrentState>("current"), get<Overview>("admin-overview")])
-      setCurrent(nextCurrent)
-      setOverview(nextOverview)
-      setCurrentCount(nextCurrent.currentCount)
-      setFlaggedCount(nextOverview.flaggedVisits)
-    } catch (error) {
-      toast.error(errorMessage(error))
-    }
-  }, [setCurrentCount, setFlaggedCount])
+  // The roster polls every 10 seconds; switching back to Now shows the last roster instantly.
+  const current = useCachedGet<CurrentState>("current", NO_PARAMS, { refreshMs: 10000 }).data ?? null
+  const overview = useCachedGet<Overview>("admin-overview", NO_PARAMS, { refreshMs: 10000 }).data ?? null
 
   React.useEffect(() => {
-    void load()
-  }, [load, dataVersion])
-  useVisibleInterval(() => void load(), 10000)
+    if (current) setCurrentCount(current.currentCount)
+  }, [current, setCurrentCount])
+  React.useEffect(() => {
+    if (overview) setFlaggedCount(overview.flaggedVisits)
+  }, [overview, setFlaggedCount])
 
   const roster = current?.students ?? []
   const longCount = roster.filter((visit) => (minutesSince(visit.checkedInAt, now) ?? 0) >= LONG_VISIT_MINUTES).length

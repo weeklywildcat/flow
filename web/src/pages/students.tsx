@@ -1,5 +1,4 @@
 import * as React from "react"
-import { toast } from "sonner"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowRight01Icon, FileImportIcon, Search01Icon, UserAdd01Icon } from "@hugeicons/core-free-icons"
 
@@ -9,9 +8,11 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { PageBody, StatusBadge, StudentAvatar, Toolbar, errorMessage } from "@/components/common"
+import { PageBody, StatusBadge, StudentAvatar, Toolbar } from "@/components/common"
 import { ImportDialog } from "@/components/import-dialog"
-import { GRADES, get, type StudentList } from "@/lib/api"
+import { GRADES, type StudentList } from "@/lib/api"
+import { useCachedGet } from "@/lib/cache"
+import { filterDirectory, useDirectory } from "@/lib/directory"
 import { useDashboard } from "@/lib/dashboard"
 import { useDebouncedValue } from "@/lib/hooks"
 import { formatDay, formatNumber, fullName, plural } from "@/lib/format"
@@ -27,30 +28,34 @@ const STATUS_ITEMS = [
 ]
 
 export function StudentsPage() {
-  const { openStudent, dataVersion } = useDashboard()
+  const { openStudent } = useDashboard()
   const [search, setSearch] = React.useState("")
   const [grade, setGrade] = React.useState("")
   const [status, setStatus] = React.useState("")
   const [offset, setOffset] = React.useState(0)
-  const [data, setData] = React.useState<StudentList | null>(null)
-  const [loading, setLoading] = React.useState(true)
   const [importOpen, setImportOpen] = React.useState(false)
-  const query = useDebouncedValue(search.trim(), 250)
+  const debounced = useDebouncedValue(search.trim(), 250)
+
+  // Search runs against the in-memory directory, so it updates on every keystroke. A directory
+  // too large to hold in memory falls back to paging through the server.
+  const { directory, refreshing, failed } = useDirectory()
+  const local = directory !== null && !directory.truncated
+  const query = local ? search.trim() : debounced
+  const server = useCachedGet<StudentList>(
+    "admin-students",
+    (directory && !local) || failed ? { limit: PAGE_SIZE, offset, q: query, grade, status } : null
+  )
 
   React.useEffect(() => setOffset(0), [query, grade, status])
 
-  React.useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    get<StudentList>("admin-students", { limit: PAGE_SIZE, offset, q: query, grade, status })
-      .then((next) => !cancelled && setData(next))
-      .catch((error) => !cancelled && toast.error(errorMessage(error)))
-      .finally(() => !cancelled && setLoading(false))
-    return () => {
-      cancelled = true
-    }
-  }, [offset, query, grade, status, dataVersion])
-
+  const matches = React.useMemo(
+    () => (local ? filterDirectory(directory.students, { q: query, grade, status }) : null),
+    [local, directory, query, grade, status]
+  )
+  const data: StudentList | null = matches
+    ? { total: matches.length, limit: PAGE_SIZE, offset, students: matches.slice(offset, offset + PAGE_SIZE) }
+    : (server.data ?? null)
+  const loading = local ? refreshing : server.loading || (directory === null && !failed)
   const students = data?.students ?? []
   const total = data?.total ?? 0
 

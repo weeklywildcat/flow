@@ -26,10 +26,13 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { PageBody, StudentAvatar, Toolbar, errorMessage, useConfirm } from "@/components/common"
-import { get, post, type FlagKind, type FlaggedList, type FlaggedVisit } from "@/lib/api"
+import { post, type FlagKind, type FlaggedList, type FlaggedVisit } from "@/lib/api"
+import { useCachedGet } from "@/lib/cache"
 import { useDashboard } from "@/lib/dashboard"
 import { formatDateTime, formatDuration, fullName, plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
+
+const NO_PARAMS = {}
 
 const FLAG_LABELS: Record<FlagKind, { label: string; hint: string }> = {
   open: { label: "Never checked out", hint: "Still open long after check-in" },
@@ -50,30 +53,27 @@ function formatOpenFor(minutes: number): string {
 }
 
 export function FlaggedPage() {
-  const { dataVersion, invalidate, openStudent } = useDashboard()
+  const { invalidate, openStudent } = useDashboard()
   const confirm = useConfirm()
-  const [data, setData] = React.useState<FlaggedList | null>(null)
   const [values, setValues] = React.useState<Record<number, string>>({})
   const [selected, setSelected] = React.useState<Set<number>>(new Set())
   const [mode, setMode] = React.useState<Mode>("typical")
   const [fixedMinutes, setFixedMinutes] = React.useState("30")
   const [busy, setBusy] = React.useState(false)
 
+  const data = useCachedGet<FlaggedList>("admin-flagged-visits", NO_PARAMS).data ?? null
+
+  // Reset the editable lengths only when the list itself changes, so a background refresh that
+  // returns the same visits never wipes out minutes someone is typing.
+  const listSignature = data ? data.visits.map((visit) => `${visit.visitId}:${visit.suggestedMinutes}`).join(",") : ""
+  const appliedSignature = React.useRef<string | null>(null)
   React.useEffect(() => {
-    let cancelled = false
-    get<FlaggedList>("admin-flagged-visits")
-      .then((next) => {
-        if (cancelled) return
-        setData(next)
-        setValues(Object.fromEntries(next.visits.map((visit) => [visit.visitId, String(visit.suggestedMinutes)])))
-        setSelected(new Set(next.visits.map((visit) => visit.visitId)))
-        setMode("typical")
-      })
-      .catch((error) => !cancelled && toast.error(errorMessage(error)))
-    return () => {
-      cancelled = true
-    }
-  }, [dataVersion])
+    if (!data || appliedSignature.current === listSignature) return
+    appliedSignature.current = listSignature
+    setValues(Object.fromEntries(data.visits.map((visit) => [visit.visitId, String(visit.suggestedMinutes)])))
+    setSelected(new Set(data.visits.map((visit) => visit.visitId)))
+    setMode("typical")
+  }, [data, listSignature])
 
   const visits = data?.visits ?? []
   const allSelected = visits.length > 0 && visits.every((visit) => selected.has(visit.visitId))

@@ -8,7 +8,9 @@ import { StudentSheet } from "@/components/student-sheet"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { get, type Overview } from "@/lib/api"
+import { type Overview } from "@/lib/api"
+import { clearCache, fetchCached } from "@/lib/cache"
+import { markDirectoryStale } from "@/lib/directory"
 import { DashboardContext, isPageId, type PageId, type StudentRef } from "@/lib/dashboard"
 import { useVisibleInterval } from "@/lib/hooks"
 import { DevicesPage } from "@/pages/devices"
@@ -61,7 +63,7 @@ export function App() {
 
   // Keeps the sidebar counts current while staff are on other pages; the Now page polls faster.
   const refreshCount = React.useCallback(() => {
-    get<Overview>("admin-overview")
+    fetchCached<Overview>("admin-overview")
       .then((overview) => {
         setCurrentCount(overview.currentCount)
         setFlaggedCount(overview.flaggedVisits)
@@ -79,7 +81,12 @@ export function App() {
       setPage,
       openStudent: setStudent,
       dataVersion,
-      invalidate: () => setDataVersion((version) => version + 1),
+      invalidate: () => {
+        // Something changed: nothing cached from before it may be shown again.
+        clearCache()
+        markDirectoryStale()
+        setDataVersion((version) => version + 1)
+      },
       currentCount,
       setCurrentCount,
       flaggedCount,

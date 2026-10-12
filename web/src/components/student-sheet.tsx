@@ -13,6 +13,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { StatusBadge, StudentAvatar, errorMessage } from "@/components/common"
 import { GRADES, get, post, type StudentDetail, type StudentList } from "@/lib/api"
+import { fetchCached, peekCached } from "@/lib/cache"
+import { peekDirectory } from "@/lib/directory"
 import { useDashboard, type StudentRef } from "@/lib/dashboard"
 import { useNow } from "@/lib/hooks"
 import { formatDateTime, formatDay, formatDuration, formatNumber, formatTime, fullName, minutesSince } from "@/lib/format"
@@ -25,6 +27,8 @@ const BLANK: Form = { studentId: "", firstName: "", lastName: "", barcode: "", g
 async function resolveId(ref: StudentRef): Promise<number> {
   if ("id" in ref) return ref.id
   if ("studentId" in ref) {
+    const known = peekDirectory()?.byStudentId.get(ref.studentId)
+    if (known) return known.id
     const list = await get<StudentList>("admin-students", { q: ref.studentId, limit: 20 })
     const match = list.students.find((student) => student.studentId === ref.studentId)
     if (!match) throw new Error("That student is no longer in the directory.")
@@ -43,12 +47,19 @@ export function StudentSheet({ student: ref, onClose }: { student: StudentRef | 
   const creating = ref !== null && "create" in ref
   const open = ref !== null
 
+  const latest = React.useRef(0)
   const load = React.useCallback(
     async (target: StudentRef) => {
+      // Only the most recently opened student may write to the sheet.
+      const ticket = ++latest.current
       try {
         const id = await resolveId(target)
-        setDetail(await get<StudentDetail>("admin-student", { id }))
+        const cached = peekCached<StudentDetail>("admin-student", { id })
+        if (cached && ticket === latest.current) setDetail(cached)
+        const fresh = await fetchCached<StudentDetail>("admin-student", { id })
+        if (ticket === latest.current) setDetail(fresh)
       } catch (error) {
+        if (ticket !== latest.current) return
         toast.error(errorMessage(error))
         onClose()
       }

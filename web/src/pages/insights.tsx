@@ -1,5 +1,4 @@
 import * as React from "react"
-import { toast } from "sonner"
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowDown02Icon, ArrowUp02Icon, Award01Icon } from "@hugeicons/core-free-icons"
@@ -10,8 +9,9 @@ import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { PageBody, StudentAvatar, Toolbar, errorMessage } from "@/components/common"
-import { get, type Stats } from "@/lib/api"
+import { PageBody, StudentAvatar, Toolbar } from "@/components/common"
+import { type Stats } from "@/lib/api"
+import { useCachedGet } from "@/lib/cache"
 import { useDashboard } from "@/lib/dashboard"
 import {
   formatCalendarDate,
@@ -43,27 +43,14 @@ function rangeFor(preset: Preset, custom: { from: string; to: string }) {
 const visitsConfig = { visits: { label: "Visits", color: "var(--chart-visits)" } } satisfies ChartConfig
 
 export function InsightsPage() {
-  const { dataVersion, openStudent } = useDashboard()
+  const { openStudent } = useDashboard()
   const [preset, setPreset] = React.useState<Preset>("month")
   const [custom, setCustom] = React.useState(() => ({ from: todayLocal().slice(0, 8) + "01", to: todayLocal() }))
-  const [stats, setStats] = React.useState<Stats | null>(null)
-  const [loading, setLoading] = React.useState(true)
   const range = rangeFor(preset, custom)
+  // Flipping between ranges shows the last result for that range at once while it refreshes.
+  const { data: stats, loading } = useCachedGet<Stats>("admin-stats", range.from > range.to ? null : range)
 
-  React.useEffect(() => {
-    if (range.from > range.to) return
-    let cancelled = false
-    setLoading(true)
-    get<Stats>("admin-stats", range)
-      .then((next) => !cancelled && setStats(next))
-      .catch((error) => !cancelled && toast.error(errorMessage(error)))
-      .finally(() => !cancelled && setLoading(false))
-    return () => {
-      cancelled = true
-    }
-  }, [range.from, range.to, dataVersion])
-
-  const s = stats
+  const s = stats ?? null
   const dim = loading && s ? "opacity-60 transition-opacity" : "transition-opacity"
 
   return (
