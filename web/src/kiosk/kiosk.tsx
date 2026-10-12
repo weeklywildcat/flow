@@ -480,7 +480,7 @@ export function Kiosk() {
         <div className="flex items-center gap-3">
           <FlowMark className="size-11 rounded-2xl shadow-lg shadow-primary/25" />
           <div className="leading-tight">
-            <p className="text-lg font-bold tracking-tight">Ninety Six High School Library</p>
+            <p className="text-lg font-semibold tracking-tight">Ninety Six High School Library</p>
             <p className="text-sm text-muted-foreground">
               <Greeting />
             </p>
@@ -742,7 +742,7 @@ function Centered({ children }: { children: React.ReactNode }) {
 }
 
 function Title({ children }: { children: React.ReactNode }) {
-  return <h1 className="text-[clamp(2rem,4.6vw,3.5rem)] leading-[1.05] font-extrabold tracking-tight text-balance">{children}</h1>
+  return <h1 className="text-[clamp(2rem,4.6vw,3.5rem)] leading-[1.05] font-bold tracking-tight text-balance">{children}</h1>
 }
 
 function Lead({ children }: { children: React.ReactNode }) {
@@ -1004,7 +1004,7 @@ function LiveClock() {
   const now = useClock()
   return (
     <div className="text-right leading-tight">
-      <p className="text-2xl font-bold tracking-tight tabular-nums">
+      <p className="text-2xl font-semibold tracking-tight tabular-nums">
         {now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
       </p>
       <p className="text-sm text-muted-foreground">{now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
