@@ -6,8 +6,8 @@ The Chromebook kiosk lets students scan their ID to check in or check out. The l
 
 ## Routes
 
-- `GET /library/kiosk` — scanner kiosk for student check-in/out.
-- `GET /library/manage` — Cloudflare Access-protected librarian dashboard (the React app in `dashboard/`, served from `dist/client`).
+- `GET /library/kiosk` — scanner kiosk for student check-in/out (the React app in `web/src/kiosk`).
+- `GET /library/manage` — Cloudflare Access-protected librarian dashboard (the React app in `web/src`).
 - `POST /api/library/scan` — resolve a scanned student ID.
 - `POST /api/library/checkin` — record a visit.
 - `POST /api/library/checkout` — close a visit.
@@ -47,13 +47,13 @@ Cloudflare Access should protect `/library/manage` and staff API routes. Kiosk r
 
    The receiver creates `Events` and `Visit Log` tabs automatically. Each D1 event has a sync ID, so Worker retries do not duplicate rows. The Worker attempts delivery immediately, retries pending events every five minutes, and the librarian dashboard also provides a manual **Sync now** action.
 
-4. Build. This type-checks the Worker and builds the librarian dashboard into `dist/client`, which the Worker serves as static assets, so run it before every deploy:
+4. Build. This type-checks the Worker and builds the kiosk and librarian dashboard into `dist/client`, which the Worker serves as static assets, so run it before every deploy:
 
    ```sh
    npm run build
    ```
 
-   For local work, `npm run dev` builds the dashboard and starts `wrangler dev`; open `http://localhost:8787/library/manage`. Requests from localhost skip the Cloudflare Access check.
+   For local work, `npm run dev` builds both pages and starts `wrangler dev`; open `http://localhost:8787/library/manage` or `/library/kiosk`. Requests from localhost skip the Cloudflare Access check and the kiosk pairing step.
 
 5. Deploy the library Worker:
 

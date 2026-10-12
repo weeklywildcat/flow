@@ -9,9 +9,11 @@ The library Worker is intentionally focused on one workflow: recording who is in
 - A known student with an active visit is checked out immediately when they scan again.
 - A new barcode can be saved with the student’s name and grade, then checked in.
 
+The kiosk is built from the same shadcn/ui setup in [`web/src/kiosk`](../web/src/kiosk). Pairing uses a one-time 8-digit PIN from **Devices & data**. Both pages share their JavaScript and CSS from `/library/assets/`, which sits outside the Access-protected `/library/manage` path so the kiosk can load it; the shared files contain no data, and every staff API route still requires Access.
+
 ## Librarian dashboard
 
-Open `/library/manage` behind Cloudflare Access. The dashboard is a React app in [`dashboard/`](../dashboard) built with shadcn/ui (Base UI, `base-luma` style) and served by the Worker from static assets. It has five sections:
+Open `/library/manage` behind Cloudflare Access. The dashboard is a React app in [`web/`](../web) built with shadcn/ui (Base UI, `base-luma` style) and served by the Worker from static assets. It has five sections:
 
 - **Now** — the live roster with per-student checkout, a “Check everyone out” action that lets you correct the time of anyone who stayed more than 30 minutes, today’s counts, open visits over two hours, offline kiosks, and recent activity.
 - **Visits** — history by date range, reason, or name, with CSV export, duration editing (one visit or many), and archive/restore.
