@@ -23,6 +23,7 @@ const STATUS_ITEMS = [
   { value: "", label: "All records" },
   { value: "active", label: "Active" },
   { value: "inactive", label: "Inactive" },
+  { value: "name-check", label: "Name check pending" },
 ]
 
 export function StudentsPage() {
@@ -81,7 +82,7 @@ export function StudentsPage() {
           </SelectContent>
         </Select>
         <Select items={STATUS_ITEMS} value={status} onValueChange={(value) => setStatus(String(value ?? ""))}>
-          <SelectTrigger aria-label="Status" className="w-36">
+          <SelectTrigger aria-label="Status" className="w-48">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -153,7 +154,10 @@ export function StudentsPage() {
                     <TableCell className="text-right tabular-nums">{formatNumber(student.visitCount)}</TableCell>
                     <TableCell className="hidden text-muted-foreground sm:table-cell">{formatDay(student.lastVisitAt)}</TableCell>
                     <TableCell className="hidden sm:table-cell">
-                      <StatusBadge tone={student.active ? "good" : "muted"}>{student.active ? "Active" : "Inactive"}</StatusBadge>
+                      <div className="flex flex-wrap gap-1.5">
+                        <StatusBadge tone={student.active ? "good" : "muted"}>{student.active ? "Active" : "Inactive"}</StatusBadge>
+                        {student.nameCheckRequestedAt ? <StatusBadge tone="warn">Name check</StatusBadge> : null}
+                      </div>
                     </TableCell>
                     <TableCell className="pr-(--card-spacing) text-muted-foreground">
                       <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="size-4" />

@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS library_students (
   last_name TEXT NOT NULL,
   grade TEXT,
   active INTEGER NOT NULL DEFAULT 1,
+  name_check_requested_at TEXT,
   updated_at TEXT NOT NULL
 );
 

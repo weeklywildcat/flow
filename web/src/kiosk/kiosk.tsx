@@ -16,6 +16,7 @@ import {
   Tick02Icon,
   UserAdd01Icon,
   UserGroupIcon,
+  UserQuestion01Icon,
   WifiDisconnected01Icon,
 } from "@hugeicons/core-free-icons"
 
@@ -42,6 +43,9 @@ import { createEffects, startBackgroundMotion, type Effects } from "./fx"
 
 type SuccessVariant = "checkin" | "checkout"
 
+/** Where the scan was headed before the kiosk stopped to ask for a name. */
+type AfterNameCheck = { mode: "checkout" } | { mode: "checkin"; recentlyCleared: boolean; reasons: string[] }
+
 type Screen =
   | { kind: "booting" }
   | { kind: "pairing"; error?: string }
@@ -50,6 +54,7 @@ type Screen =
   | { kind: "reasons"; firstName: string; reasons: string[] }
   | { kind: "new-student"; reasons: string[] }
   | { kind: "recent-clear"; firstName: string; reasons: string[] }
+  | { kind: "confirm-name"; student: KioskStudent; next: AfterNameCheck }
   | { kind: "success"; variant: SuccessVariant; title: string; detail: string; hint: string }
   | { kind: "error"; title: string; detail: string }
   | { kind: "offline"; message: string }
@@ -58,6 +63,7 @@ const DEFAULT_REASONS = ["Class work", "Printing", "Book checkout", "Lunch", "Me
 const GRADES = ["9", "10", "11", "12"]
 const REASONS_TIMEOUT_MS = 20000
 const NEW_STUDENT_TIMEOUT_MS = 60000
+const NAME_CHECK_TIMEOUT_MS = 60000
 
 // Each reason gets its own colour so the grid reads at a glance. Class names stay literal
 // so Tailwind can see them.
@@ -78,6 +84,7 @@ const FOOTER: Record<Screen["kind"], { hint: string; status: string }> = {
   reasons: { hint: "Tap one reason.", status: "Choose" },
   "new-student": { hint: "This saves your ID for future visits.", status: "Continue" },
   "recent-clear": { hint: "Choose an option to continue.", status: "Confirm" },
+  "confirm-name": { hint: "This updates your library record.", status: "Confirm" },
   success: { hint: "Ready for the next scan.", status: "Done" },
   error: { hint: "Please see the librarian.", status: "Help" },
   offline: { hint: "Check Wi-Fi if this message does not clear.", status: "Offline" },
@@ -139,7 +146,7 @@ export function Kiosk() {
 
   const focusScanner = React.useCallback(() => {
     const kind = screenRef.current.kind
-    if (kind === "new-student" || kind === "pairing" || kind === "recent-clear") return
+    if (kind === "new-student" || kind === "pairing" || kind === "recent-clear" || kind === "confirm-name") return
     if (document.activeElement?.closest?.("button")) return
     requestAnimationFrame(() => scanInput.current?.focus({ preventScroll: true }))
   }, [])
@@ -240,6 +247,26 @@ export function Kiosk() {
   const verifyConnectionRef = React.useRef(verifyConnection)
   verifyConnectionRef.current = verifyConnection
 
+  /** Picks the scan back up where it was headed once the name question is answered or skipped. */
+  const continueAfterNameCheck = React.useCallback((firstName: string, next: AfterNameCheck) => {
+    if (next.mode === "checkout") {
+      showSuccess("checkout", `See you next time, ${firstName || "friend"}!`, "You’re checked out.", 1500)
+    } else if (next.recentlyCleared) {
+      clearTimers()
+      busy.current = false
+      go({ kind: "recent-clear", firstName: firstName || "there", reasons: next.reasons })
+    } else {
+      showReasons({ firstName }, next.reasons)
+    }
+  }, [go, showSuccess, showReasons])
+
+  const askForName = React.useCallback((student: KioskStudent, next: AfterNameCheck) => {
+    clearTimer("working")
+    busy.current = false
+    go({ kind: "confirm-name", student, next })
+    autoReturn(NAME_CHECK_TIMEOUT_MS)
+  }, [go, autoReturn])
+
   // ---- Scanning ---------------------------------------------------------------------------
 
   const handleScan = React.useCallback(async (value: string) => {
@@ -265,9 +292,13 @@ export function Kiosk() {
       clearTimer("working")
       if (data.mode === "checkout") {
         await settle()
-        showSuccess("checkout", `See you next time, ${data.student.firstName || "friend"}!`, "You’re checked out.", 1500)
+        if (data.nameCheck) askForName(data.student, { mode: "checkout" })
+        else showSuccess("checkout", `See you next time, ${data.student.firstName || "friend"}!`, "You’re checked out.", 1500)
       } else if (data.mode === "checkin") {
-        if (data.recentlyCleared) {
+        if (data.nameCheck) {
+          await settle()
+          askForName(data.student, { mode: "checkin", recentlyCleared: Boolean(data.recentlyCleared), reasons: data.reasons ?? DEFAULT_REASONS })
+        } else if (data.recentlyCleared) {
           busy.current = false
           go({ kind: "recent-clear", firstName: data.student.firstName || "there", reasons: data.reasons ?? DEFAULT_REASONS })
         } else {
@@ -290,7 +321,7 @@ export function Kiosk() {
       setReading(false)
       focusScanner()
     }
-  }, [go, showSuccess, showReasons, showError, autoReturn, focusScanner])
+  }, [go, showSuccess, showReasons, showError, autoReturn, focusScanner, askForName])
 
   const finishBufferedScan = React.useCallback(() => {
     const value = (scanInput.current?.value || keyBuffer.current).trim()
@@ -424,6 +455,18 @@ export function Kiosk() {
       showReasons(data.student, data.reasons ?? reasons)
     } catch (error) {
       showError("Could not save", message(error, "Try again or see the librarian."), 3500)
+    }
+  }
+
+  async function confirmName(names: { firstName: string; lastName: string }, next: AfterNameCheck) {
+    if (busy.current || !barcode.current) return
+    clearTimer("auto")
+    busy.current = true
+    try {
+      const data = await kioskPost<{ student: KioskStudent }>("/api/library/confirm-name", { barcode: barcode.current, ...names })
+      continueAfterNameCheck(data.student.firstName, next)
+    } catch (error) {
+      showError("Could not save your name", message(error, "Try again or see the librarian."), 3500)
     }
   }
 
@@ -581,6 +624,15 @@ export function Kiosk() {
               </Centered>
             ) : null}
 
+            {screen.kind === "confirm-name" ? (
+              <NameCheckForm
+                current={screen.student}
+                focalRef={focal}
+                onSubmit={(names) => void confirmName(names, screen.next)}
+                onSkip={() => continueAfterNameCheck(screen.student.firstName, screen.next)}
+              />
+            ) : null}
+
             {screen.kind === "success" ? (
               <Centered>
                 <div
@@ -631,12 +683,12 @@ export function Kiosk() {
             {screen.kind === "pairing" ? <PairingForm error={screen.error} onPair={pair} focalRef={focal} /> : null}
           </div>
 
-          {screen.kind === "reasons" || screen.kind === "new-student" ? (
+          {screen.kind === "reasons" || screen.kind === "new-student" || screen.kind === "confirm-name" ? (
             <div
               key={`countdown-${screenKey}`}
               aria-hidden="true"
               className={cn("kiosk-countdown absolute inset-x-0 bottom-0 h-1.5 bg-primary/40", selectedReason && "[animation-play-state:paused]")}
-              style={{ "--duration": `${screen.kind === "reasons" ? REASONS_TIMEOUT_MS : NEW_STUDENT_TIMEOUT_MS}ms` } as React.CSSProperties}
+              style={{ "--duration": `${screen.kind === "reasons" ? REASONS_TIMEOUT_MS : screen.kind === "confirm-name" ? NAME_CHECK_TIMEOUT_MS : NEW_STUDENT_TIMEOUT_MS}ms` } as React.CSSProperties}
             />
           ) : null}
         </Card>
@@ -684,7 +736,7 @@ export function Kiosk() {
         aria-label="Scanner input"
         onChange={(event) => {
           const kind = screenRef.current.kind
-          if (kind === "reasons" || kind === "new-student") {
+          if (kind === "reasons" || kind === "new-student" || kind === "confirm-name") {
             event.currentTarget.value = ""
             return
           }
@@ -823,6 +875,70 @@ function NewStudentForm({
         <Button type="submit" size="lg" className="h-12 px-8 text-base" disabled={!ready || saving}>
           {saving ? <Spinner /> : null}
           Continue
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+/**
+ * A librarian flagged this student's name as possibly wrong. The fields start empty so the
+ * student types their real name instead of tapping past whatever is on file.
+ */
+function NameCheckForm({
+  current,
+  focalRef,
+  onSubmit,
+  onSkip,
+}: {
+  current: KioskStudent
+  focalRef: React.RefObject<HTMLDivElement | null>
+  onSubmit: (names: { firstName: string; lastName: string }) => void
+  onSkip: () => void
+}) {
+  const [firstName, setFirstName] = React.useState("")
+  const [lastName, setLastName] = React.useState("")
+  const [saving, setSaving] = React.useState(false)
+  const ready = Boolean(firstName.trim() && lastName.trim())
+
+  return (
+    <form
+      data-kiosk-form
+      className="flex flex-col gap-6"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (!ready || saving) return
+        setSaving(true)
+        onSubmit({ firstName: firstName.trim(), lastName: lastName.trim() })
+      }}
+    >
+      <div ref={focalRef} className="flex flex-col items-center gap-3 text-center">
+        <span className="flex size-16 items-center justify-center rounded-3xl bg-amber-500/15 text-amber-600">
+          <HugeiconsIcon icon={UserQuestion01Icon} strokeWidth={2} className="size-8" />
+        </span>
+        <Title>Quick name check</Title>
+        <Lead>Your name may be entered incorrectly. Can you re-enter it?</Lead>
+        <p className="rounded-full bg-muted px-4 py-1.5 text-sm text-muted-foreground">
+          We have you as <span className="font-semibold text-foreground">{`${current.firstName} ${current.lastName}`.trim()}</span>
+        </p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field>
+          <FieldLabel htmlFor="kiosk-confirm-first">First name</FieldLabel>
+          <Input id="kiosk-confirm-first" className="h-12 text-lg" autoComplete="off" autoFocus required value={firstName} onChange={(event) => setFirstName(event.target.value)} />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="kiosk-confirm-last">Last name</FieldLabel>
+          <Input id="kiosk-confirm-last" className="h-12 text-lg" autoComplete="off" required value={lastName} onChange={(event) => setLastName(event.target.value)} />
+        </Field>
+      </div>
+      <div className="flex flex-wrap justify-center gap-3">
+        <Button type="button" variant="ghost" size="lg" className="h-12 px-6 text-base" disabled={saving} onClick={onSkip}>
+          Skip for now
+        </Button>
+        <Button type="submit" size="lg" className="h-12 px-8 text-base" disabled={!ready || saving}>
+          {saving ? <Spinner /> : null}
+          Save my name
         </Button>
       </div>
     </form>

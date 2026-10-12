@@ -97,6 +97,8 @@ export type Student = {
   updatedAt: string
   visitCount: number
   lastVisitAt: string | null
+  /** Set while the kiosk is waiting to ask this student to re-enter their name. */
+  nameCheckRequestedAt: string | null
   timeSpentMinutes?: number
   completedTimeMinutes?: number
   averageCompletedVisitMinutes?: number | null
