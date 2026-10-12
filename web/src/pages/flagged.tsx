@@ -162,7 +162,7 @@ export function FlaggedPage() {
         <CardHeader>
           <CardTitle>Likely missed checkouts</CardTitle>
           <CardDescription>
-            Visits longer than {formatDuration(data?.thresholdMinutes ?? 120)}, or still open that long after check-in,
+            Visits longer than {formatDuration(data?.thresholdMinutes ?? 60)}, or still open that long after check-in,
             usually mean a student forgot to scan out. Fix them to a normal length, or keep any that really were that
             long.
           </CardDescription>
