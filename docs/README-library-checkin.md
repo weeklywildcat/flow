@@ -11,13 +11,15 @@ The library Worker is intentionally focused on one workflow: recording who is in
 
 ## Librarian dashboard
 
-Open `/library/manage` behind Cloudflare Access. The dashboard shows:
+Open `/library/manage` behind Cloudflare Access. The dashboard is a React app in [`dashboard/`](../dashboard) built with shadcn/ui (Base UI, `base-luma` style) and served by the Worker from static assets. It has five sections:
 
-- the current number of students in the library;
-- the active student roster, reason, and check-in time;
-- a checkout action for each student;
-- a “Check everyone out” end-of-day action; and
-- Chromebook pairing plus a Google Sheets event archive with automatic retry.
+- **Now** — the live roster with per-student checkout, a “Check everyone out” action that lets you correct the time of anyone who stayed more than 30 minutes, today’s counts, open visits over two hours, offline kiosks, and recent activity.
+- **Visits** — history by date range, reason, or name, with CSV export, duration editing (one visit or many), and archive/restore.
+- **Students** — the directory, a profile sheet with visit totals and a checkout shortcut, add/edit, and CSV or JSON roster import.
+- **Insights** — traffic, time of day, weekdays, reasons, grades, regulars, lunch-window facts, and school-year milestones.
+- **Devices & data** — Chromebook pairing and revocation, Google Sheets sync status with **Sync now**, and CSV export.
+
+Press ⌘K (Ctrl+K) anywhere to find a student. The dashboard calls the staff API through `/library/manage?api=<route>` so every request carries the Cloudflare Access identity.
 
 There are no status, capacity, opening-time, or schedule controls. A student can check in regardless of the current count.
 

@@ -1,16 +1,9 @@
 import libraryApp, { ensureVisitArchiveColumns } from "./library";
-import { adminHtml } from "./admin-ui";
 
 const TIMEZONE = "America/New_York" as const;
 
 const API_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
-  "Cache-Control": "no-store",
-  ...securityHeaders(),
-};
-
-const HTML_HEADERS = {
-  "Content-Type": "text/html; charset=utf-8",
   "Cache-Control": "no-store",
   ...securityHeaders(),
 };
@@ -54,12 +47,6 @@ export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
     const pathname = normalizePath(url.pathname);
-
-    if (pathname === "/library/manage") {
-      return request.method === "GET"
-        ? new Response(adminHtml(), { headers: HTML_HEADERS })
-        : methodNotAllowed(["GET"]);
-    }
 
     if (pathname.startsWith("/api/library/admin-")) {
       if (!isStaffAuthorized(request)) return json({ error: "Unauthorized." }, 401);
