@@ -140,6 +140,12 @@ export default {
         return Response.redirect(`${url.origin}/library/kiosk`, 302);
       }
 
+      // Public, unauthenticated, aggregate-only feed for signage. It deliberately lives outside
+      // /api/library/* so the staff and kiosk authorization above stays exactly as it is.
+      if (pathname === "/library/presence.json") {
+        return request.method === "GET" ? handlePublicPresence(env) : methodNotAllowed(["GET"]);
+      }
+
       if (pathname === "/api/library/scan") {
         return request.method === "POST" ? handleScan(request, env, ctx) : methodNotAllowed(["POST"]);
       }
@@ -983,6 +989,51 @@ async function getCurrentState(env: LibraryEnv, includeStudents: boolean) {
     timezone: TIMEZONE,
     students: activeVisits.map(visitPayload),
   };
+}
+
+/**
+ * The complete public presence contract. Every field is a primitive built explicitly below, and
+ * `satisfies` makes the type check reject any extra property, so no student, visit, roster or
+ * staff field can be added to this response by accident.
+ */
+type PublicPresence = {
+  schemaVersion: 1;
+  currentCount: number;
+  generatedAt: string;
+  latestCheckIn: { cursor: string; at: string } | null;
+};
+
+type LatestCheckInSignalRow = {
+  id: number;
+  checked_in_at: string;
+};
+
+/** Newest non-archived check-in, reduced to its row id and time. Selects nothing else. */
+async function getLatestCheckInSignal(env: LibraryEnv): Promise<LatestCheckInSignalRow | null> {
+  const row = await env.SIGNAGE_DB.prepare(
+    `SELECT id, checked_in_at
+     FROM library_visits
+     WHERE archived_at IS NULL
+     ORDER BY checked_in_at DESC, id DESC
+     LIMIT 1`
+  ).first<LatestCheckInSignalRow>();
+  return row ?? null;
+}
+
+async function handlePublicPresence(env: LibraryEnv): Promise<Response> {
+  // This path is outside the /api/library/* block that normally runs the migration first.
+  await ensureVisitArchiveColumns(env);
+
+  const [currentCount, latest] = await Promise.all([getActiveCount(env), getLatestCheckInSignal(env)]);
+
+  const presence = {
+    schemaVersion: 1,
+    currentCount,
+    generatedAt: new Date().toISOString(),
+    latestCheckIn: latest ? { cursor: String(latest.id), at: latest.checked_in_at } : null,
+  } satisfies PublicPresence;
+
+  return json(presence);
 }
 
 async function getActiveCount(env: LibraryEnv): Promise<number> {

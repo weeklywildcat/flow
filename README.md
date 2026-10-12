@@ -8,6 +8,7 @@ The Chromebook kiosk lets students scan their ID to check in or check out. The l
 
 - `GET /library/kiosk` — scanner kiosk for student check-in/out (the React app in `web/src/kiosk`).
 - `GET /library/manage` — Cloudflare Access-protected librarian dashboard (the React app in `web/src`).
+- `GET /library/presence.json` — public aggregate library occupancy feed for signage; contains no student information.
 - `POST /api/library/scan` — resolve a scanned student ID.
 - `POST /api/library/checkin` — record a visit.
 - `POST /api/library/checkout` — close a visit.
@@ -16,7 +17,35 @@ The Chromebook kiosk lets students scan their ID to check in or check out. The l
 - `GET /api/library/sheet-status` — staff-only Google Sheets queue status.
 - `POST /api/library/sync-sheets` — staff-only retry for queued archive events.
 
-Cloudflare Access should protect `/library/manage` and staff API routes. Kiosk routes use the paired Chromebook token.
+Cloudflare Access should protect `/library/manage` and staff API routes. Kiosk routes use the paired Chromebook token. `/library/kiosk`, `/library/assets/*` and `/library/presence.json` must stay outside any Access application.
+
+### Public presence feed
+
+`GET /library/presence.json` is intentionally unauthenticated and aggregate-only, for signage such as Tilecast:
+
+```json
+{
+  "schemaVersion": 1,
+  "currentCount": 12,
+  "generatedAt": "2026-10-12T17:55:34.123Z",
+  "latestCheckIn": { "cursor": "2451", "at": "2026-10-12T17:55:31.402Z" }
+}
+```
+
+- `currentCount` uses the same definition as the live roster: visits with no checkout that are not archived.
+- `latestCheckIn` describes the newest non-archived check-in by time (row id breaks ties). It is `null` when there are no visits. Checkouts never change it.
+- Nothing else is returned: no names, student IDs, grades, reasons, roster, or checkout details. Other methods return `405`. Responses are `no-store`.
+
+A changed `cursor` alone does **not** mean someone arrived: archiving the newest visit moves `latestCheckIn` back to the previous one (for example `"2"` → `"1"`). Pollers should treat it as a new arrival only when both hold:
+
+```
+latestCheckIn.cursor != previousCursor
+AND latestCheckIn.at > previousLatestCheckInAt
+```
+
+On startup or restart, record the current `cursor` and `at` without treating them as an arrival, so a restart never greets whoever happened to check in last. Never move `previousLatestCheckInAt` backward when the cursor regresses: keep the latest `at` you have seen, otherwise restoring an archived visit would look like a new arrival. A `null` previous value (no visits yet) counts as earlier than any time. Compare `at` as times (ISO-8601 UTC strings in this format also compare correctly as strings). Several check-ins between two polls appear as one change; `currentCount` is always the authoritative occupancy.
+
+`GET /api/library/current` is the opposite: it returns the active roster and stays staff-only.
 
 ## Setup
 
