@@ -26,9 +26,10 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { PageBody, StatusBadge, StudentAvatar, Toolbar, errorMessage, useConfirm } from "@/components/common"
+import { PageBody, StatusBadge, StudentAvatar, Toolbar, useConfirm } from "@/components/common"
 import { DurationDialog } from "@/components/visit-dialogs"
-import { REASONS, apiUrl, get, post, type Visit, type VisitList } from "@/lib/api"
+import { REASONS, apiUrl, post, type Visit, type VisitList } from "@/lib/api"
+import { useCachedGet } from "@/lib/cache"
 import { useDashboard } from "@/lib/dashboard"
 import { useDebouncedValue } from "@/lib/hooks"
 import {
@@ -65,7 +66,7 @@ function isEditable(visit: Visit) {
 }
 
 export function VisitsPage() {
-  const { dataVersion, invalidate, openStudent } = useDashboard()
+  const { invalidate, openStudent } = useDashboard()
   const confirm = useConfirm()
   const [period, setPeriod] = React.useState<Period>("7")
   const [custom, setCustom] = React.useState(() => ({ from: todayLocal(), to: todayLocal() }))
@@ -73,8 +74,6 @@ export function VisitsPage() {
   const [reason, setReason] = React.useState("")
   const [view, setView] = React.useState<"active" | "archived">("active")
   const [offset, setOffset] = React.useState(0)
-  const [data, setData] = React.useState<VisitList | null>(null)
-  const [loading, setLoading] = React.useState(true)
   const [selected, setSelected] = React.useState<Set<number>>(new Set())
   const [editing, setEditing] = React.useState<Visit[] | null>(null)
   const query = useDebouncedValue(search.trim(), 250)
@@ -83,29 +82,21 @@ export function VisitsPage() {
 
   React.useEffect(() => setOffset(0), [period, custom.from, custom.to, query, reason, view])
 
+  const params = { limit: PAGE_SIZE, offset, q: query, reason, from: range.from, to: range.to, archived: archived ? 1 : null }
+  const history = useCachedGet<VisitList>("admin-history", params)
+  const data = history.data ?? null
+  const loading = history.loading
+  const viewKey = JSON.stringify(params)
+
+  // A new page or filter starts with nothing selected; a refresh keeps whatever is still listed.
+  React.useEffect(() => setSelected(new Set()), [viewKey])
   React.useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    get<VisitList>("admin-history", {
-      limit: PAGE_SIZE,
-      offset,
-      q: query,
-      reason,
-      from: range.from,
-      to: range.to,
-      archived: archived ? 1 : null,
+    const listed = new Set((data?.visits ?? []).filter(isEditable).map((visit) => visit.visitId))
+    setSelected((current) => {
+      const kept = [...current].filter((visitId) => listed.has(visitId))
+      return kept.length === current.size ? current : new Set(kept)
     })
-      .then((next) => {
-        if (cancelled) return
-        setData(next)
-        setSelected(new Set())
-      })
-      .catch((error) => !cancelled && toast.error(errorMessage(error)))
-      .finally(() => !cancelled && setLoading(false))
-    return () => {
-      cancelled = true
-    }
-  }, [offset, query, reason, range.from, range.to, archived, dataVersion])
+  }, [data])
 
   const visits = data?.visits ?? []
   const editable = visits.filter(isEditable)

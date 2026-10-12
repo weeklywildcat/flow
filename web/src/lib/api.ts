@@ -13,7 +13,7 @@ export class ApiError extends Error {
   }
 }
 
-type Params = Record<string, string | number | boolean | null | undefined>
+export type Params = Record<string, string | number | boolean | null | undefined>
 
 export function apiUrl(route: string, params: Params = {}): string {
   const search = new URLSearchParams({ api: route })

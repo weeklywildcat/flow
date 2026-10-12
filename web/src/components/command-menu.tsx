@@ -22,6 +22,7 @@ import {
 import { StudentAvatar } from "@/components/common"
 import { get, type Student, type StudentList } from "@/lib/api"
 import { PAGES, useDashboard, type PageId } from "@/lib/dashboard"
+import { searchDirectory, useDirectory } from "@/lib/directory"
 import { useDebouncedValue } from "@/lib/hooks"
 import { fullName } from "@/lib/format"
 
@@ -37,29 +38,39 @@ const PAGE_ICONS: Record<PageId, IconSvgElement> = {
 export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { setPage, openStudent } = useDashboard()
   const [search, setSearch] = React.useState("")
-  const [results, setResults] = React.useState<Student[]>([])
+  const [serverResults, setServerResults] = React.useState<Student[]>([])
   const [loading, setLoading] = React.useState(false)
-  const query = useDebouncedValue(search.trim(), 180)
+  const { directory } = useDirectory()
+  // With the directory in memory, results update on every keystroke with no request at all.
+  const local = directory !== null && !directory.truncated
+  const debounced = useDebouncedValue(search.trim(), 180)
+  const query = local ? search.trim() : debounced
+  const localResults = React.useMemo(
+    () => (local && query ? searchDirectory(directory.students, query, 8) : null),
+    [local, directory, query]
+  )
+  const results = localResults ?? serverResults
 
   React.useEffect(() => {
     if (!open) setSearch("")
   }, [open])
 
   React.useEffect(() => {
-    if (!query) {
-      setResults([])
+    if (local || !query) {
+      setServerResults([])
+      setLoading(false)
       return
     }
     let cancelled = false
     setLoading(true)
     get<StudentList>("admin-students", { q: query, limit: 8 })
-      .then((list) => !cancelled && setResults(list.students))
-      .catch(() => !cancelled && setResults([]))
+      .then((list) => !cancelled && setServerResults(list.students))
+      .catch(() => !cancelled && setServerResults([]))
       .finally(() => !cancelled && setLoading(false))
     return () => {
       cancelled = true
     }
-  }, [query])
+  }, [local, query])
 
   function run(action: () => void) {
     onOpenChange(false)

@@ -75,6 +75,8 @@ const LUNCH_START_MINUTE = 11 * 60 + 45;
 const LUNCH_END_MINUTE = 13 * 60 + 40;
 const MAX_DURATION_MINUTES = 1440;
 const MAX_BATCH_VISITS = 200;
+/** A school directory is a few thousand rows at most; beyond this the dashboard searches on the server. */
+const MAX_DIRECTORY_STUDENTS = 5000;
 /** Longer than this, a visit is probably a missed checkout. Matches the overview's "needs attention" cutoff. */
 const LONG_VISIT_MINUTES = 120;
 /** How far back "typical" visit lengths are measured, and the fallback when there is no history. */
@@ -89,6 +91,7 @@ const ROUTES: Record<string, Route> = {
   "/api/library/admin-overview": { GET: (_request, env) => handleOverview(env), error: "Something went wrong." },
   "/api/library/admin-students": { GET: handleStudents, POST: handleSaveStudent, error: "Something went wrong." },
   "/api/library/admin-student": { GET: handleStudentDetail, error: "Something went wrong." },
+  "/api/library/admin-directory": { GET: (_request, env) => handleDirectory(env), error: "Could not load the student directory." },
   "/api/library/admin-history": { GET: handleHistory, error: "Something went wrong." },
   "/api/library/admin-archive-visit": { POST: handleArchiveVisit, error: "Something went wrong." },
   "/api/library/admin-stats": { GET: handleStats, error: "Could not calculate library statistics." },
@@ -222,6 +225,32 @@ async function handleStudents(request: Request, env: Env): Promise<Response> {
     limit,
     offset,
     students: rows.results.map(publicAdminStudent),
+  });
+}
+
+/**
+ * The whole directory in one response, so the dashboard can search and filter it in memory.
+ * Same rows and order as admin-students, without paging.
+ */
+async function handleDirectory(env: Env): Promise<Response> {
+  const rows = await env.SIGNAGE_DB.prepare(
+    `SELECT
+       s.id, s.student_id, s.barcode, s.first_name, s.last_name, s.grade, s.active, s.updated_at, s.name_check_requested_at,
+       COUNT(v.id) AS visit_count,
+       MAX(v.checked_in_at) AS last_visit_at
+     FROM library_students s
+     LEFT JOIN library_visits v ON v.student_row_id = s.id AND v.archived_at IS NULL
+     GROUP BY s.id
+     ORDER BY s.last_name COLLATE NOCASE, s.first_name COLLATE NOCASE, s.student_id
+     LIMIT ?`
+  ).bind(MAX_DIRECTORY_STUDENTS + 1).all<AdminStudentRow>();
+
+  const truncated = rows.results.length > MAX_DIRECTORY_STUDENTS;
+  return json({
+    generatedAt: new Date().toISOString(),
+    // Past the cap the dashboard falls back to searching on the server.
+    truncated,
+    students: rows.results.slice(0, MAX_DIRECTORY_STUDENTS).map(publicAdminStudent),
   });
 }
 

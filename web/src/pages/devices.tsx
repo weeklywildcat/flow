@@ -27,13 +27,16 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { PageBody, StatusBadge, errorMessage, useConfirm } from "@/components/common"
-import { ApiError, apiUrl, get, post, type KioskDevice, type SheetStatus } from "@/lib/api"
+import { ApiError, apiUrl, post, type KioskDevice, type SheetStatus } from "@/lib/api"
+import { useCachedGet } from "@/lib/cache"
 import { useDashboard } from "@/lib/dashboard"
-import { useNow, useVisibleInterval } from "@/lib/hooks"
+import { useNow } from "@/lib/hooks"
 import { addDays, formatAgo, formatDateTime, formatDay, schoolYearStart, todayLocal } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 /** A kiosk pings every few minutes; ten minutes of silence means it is offline. */
+const NO_PARAMS = {}
+
 const ONLINE_WINDOW_MS = 10 * 60 * 1000
 
 export function DevicesPage() {
@@ -54,18 +57,9 @@ function KiosksCard() {
   const confirm = useConfirm()
   const { invalidate } = useDashboard()
   const now = useNow(30000)
-  const [devices, setDevices] = React.useState<KioskDevice[] | null>(null)
   const [pairOpen, setPairOpen] = React.useState(false)
-
-  const load = React.useCallback(async () => {
-    try {
-      setDevices((await get<{ devices: KioskDevice[] }>("kiosk-devices")).devices)
-    } catch (error) {
-      toast.error(errorMessage(error))
-    }
-  }, [])
-  React.useEffect(() => void load(), [load])
-  useVisibleInterval(() => void load(), 30000)
+  const kiosks = useCachedGet<{ devices: KioskDevice[] }>("kiosk-devices", NO_PARAMS, { refreshMs: 30000 })
+  const devices = kiosks.data?.devices ?? null
 
   const active = (devices ?? []).filter((device) => !device.revokedAt)
   const revoked = (devices ?? []).filter((device) => device.revokedAt)
@@ -80,7 +74,6 @@ function KiosksCard() {
       run: async () => {
         await post("kiosk-revoke", { deviceId: device.id })
         toast.success(`${device.name} revoked`)
-        await load()
         invalidate()
       },
     })
@@ -158,7 +151,7 @@ function KiosksCard() {
           </Empty>
         )}
       </CardContent>
-      <PairDialog open={pairOpen} onOpenChange={setPairOpen} onPaired={load} />
+      <PairDialog open={pairOpen} onOpenChange={setPairOpen} onPaired={() => void kiosks.refresh()} />
     </Card>
   )
 }
@@ -255,31 +248,22 @@ function PairDialog({ open, onOpenChange, onPaired }: { open: boolean; onOpenCha
 }
 
 function SheetsCard() {
-  const [status, setStatus] = React.useState<SheetStatus | null>(null)
   const [syncing, setSyncing] = React.useState(false)
   const now = useNow(30000)
-
-  const load = React.useCallback(async () => {
-    try {
-      setStatus(await get<SheetStatus>("sheet-status"))
-    } catch (error) {
-      toast.error(errorMessage(error))
-    }
-  }, [])
-  React.useEffect(() => void load(), [load])
-  useVisibleInterval(() => void load(), 60000)
+  const sheet = useCachedGet<SheetStatus>("sheet-status", NO_PARAMS, { refreshMs: 60000 })
+  const status = sheet.data ?? null
 
   async function sync() {
     setSyncing(true)
     try {
       const result = await post<SheetStatus & { attempted: number; synced: number; failed: number }>("sync-sheets")
-      setStatus(result)
+      void sheet.refresh()
       if (!result.attempted) toast.success("Everything was already synced")
       else if (result.failed) toast.error(`${result.synced} synced, ${result.failed} still failing`)
       else toast.success(`${result.synced} event${result.synced === 1 ? "" : "s"} synced`)
     } catch (error) {
       toast.error(error instanceof ApiError && error.status === 503 ? "Google Sheets sync isn't configured on the Worker." : errorMessage(error))
-      void load()
+      void sheet.refresh()
     } finally {
       setSyncing(false)
     }
