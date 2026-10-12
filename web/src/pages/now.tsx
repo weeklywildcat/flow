@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils"
 const NO_PARAMS = {}
 
 /** Matches the server's "needs attention" cutoff for visits nobody closed. */
-const LONG_VISIT_MINUTES = 120
+const LONG_VISIT_MINUTES = 60
 
 type Sort = "recent" | "longest" | "name"
 const SORTS = [
@@ -112,7 +112,7 @@ export function NowPage() {
           emphasis
           label="In the library"
           value={loading ? "—" : current.currentCount}
-          detail={loading ? " " : longCount ? `${longCount} here over 2 hours` : "Live roster"}
+          detail={loading ? " " : longCount ? `${longCount} here over 1 hour` : "Live roster"}
         />
         <StatCard
           label="Visits today"
