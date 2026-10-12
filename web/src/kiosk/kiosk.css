@@ -1,84 +1,10 @@
-/* Kiosk-only styles: the living background and the particles drawn by fx.ts. Everything else
+/* Kiosk-only styles for the solid background and the particles drawn by fx.ts. Everything else
    is Tailwind on shadcn components. */
 
-/* Registered so the tone tint can fade between colours. */
-@property --tint {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: transparent;
-}
-
 .kiosk {
-  --orb-opacity: 0.85;
-  --orb-blur: 34px;
-  --orb-saturation: 120%;
-  --mesh-alpha: 1;
-  --tint: transparent;
   --ease-spring: cubic-bezier(0.22, 1.2, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 0.84, 0.3, 1);
-  background:
-    radial-gradient(120% 90% at 50% 0%, color-mix(in oklch, var(--tint) 18%, transparent), transparent 70%),
-    var(--background);
-  transition: --tint 700ms;
-}
-.kiosk[data-tone="working"] {
-  --orb-opacity: 0.95;
-  --orb-saturation: 135%;
-}
-.kiosk[data-tone="success"] {
-  --tint: #10b981;
-  --orb-opacity: 1;
-  --orb-saturation: 150%;
-}
-.kiosk[data-tone="error"] {
-  --tint: #f43f5e;
-  --orb-opacity: 0.45;
-  --orb-saturation: 60%;
-}
-
-.orb-field {
-  position: fixed;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-.orb-drift {
-  position: absolute;
-  inset: 0;
-  will-change: transform;
-}
-.orb {
-  position: absolute;
-  width: clamp(340px, 54vw, 780px);
-  height: clamp(340px, 54vw, 780px);
-  opacity: var(--orb-opacity);
-  filter: blur(var(--orb-blur)) saturate(var(--orb-saturation));
-  will-change: transform, background-position;
-  transition: opacity 760ms ease, filter 760ms ease;
-}
-.orb-primary {
-  top: clamp(-170px, -9vw, -50px);
-  left: clamp(-160px, -7vw, -35px);
-  border-radius: 46% 54% 61% 39% / 47% 42% 58% 53%;
-  background:
-    radial-gradient(ellipse at 15% 22%, rgb(16 185 129 / 0.62) 0%, rgb(16 185 129 / 0.16) 32%, transparent 68%),
-    radial-gradient(ellipse at 80% 18%, rgb(14 165 233 / 0.52) 0%, rgb(14 165 233 / 0.14) 32%, transparent 72%),
-    radial-gradient(ellipse at 55% 76%, rgb(250 204 21 / 0.34) 0%, rgb(250 204 21 / 0.08) 30%, transparent 72%),
-    radial-gradient(ellipse at 86% 78%, rgb(139 92 246 / 0.36) 0%, rgb(139 92 246 / 0.1) 28%, transparent 70%),
-    radial-gradient(ellipse at 44% 44%, rgb(20 184 166 / 0.4) 0%, rgb(14 165 233 / 0.22) 30%, transparent 78%);
-  background-size: 145% 145%;
-}
-.orb-secondary {
-  right: clamp(-170px, -9vw, -50px);
-  bottom: clamp(-170px, -9vw, -50px);
-  border-radius: 58% 42% 38% 62% / 44% 56% 45% 55%;
-  background:
-    radial-gradient(ellipse at 8% 72%, rgb(139 92 246 / 0.44) 0%, rgb(139 92 246 / 0.12) 31%, transparent 72%),
-    radial-gradient(ellipse at 48% 10%, rgb(16 185 129 / 0.42) 0%, rgb(16 185 129 / 0.1) 30%, transparent 70%),
-    radial-gradient(ellipse at 92% 48%, rgb(244 63 94 / 0.32) 0%, rgb(244 63 94 / 0.08) 30%, transparent 72%),
-    radial-gradient(ellipse at 42% 88%, rgb(245 158 11 / 0.38) 0%, rgb(245 158 11 / 0.1) 32%, transparent 70%),
-    radial-gradient(ellipse at 58% 52%, rgb(14 165 233 / 0.3) 0%, rgb(139 92 246 / 0.22) 30%, transparent 80%);
-  background-size: 150% 150%;
+  background: var(--background);
 }
 
 /* ---- One-shot effects (positioned by fx.ts) ---- */
