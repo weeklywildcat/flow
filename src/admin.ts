@@ -75,6 +75,8 @@ const LUNCH_START_MINUTE = 11 * 60 + 45;
 const LUNCH_END_MINUTE = 13 * 60 + 40;
 const MAX_DURATION_MINUTES = 1440;
 const MAX_BATCH_VISITS = 200;
+/** D1 rejects any statement with more than 100 bound parameters, so id lists are sent in pieces. */
+const MAX_BOUND_PARAMETERS = 100;
 /** A school directory is a few thousand rows at most; beyond this the dashboard searches on the server. */
 const MAX_DIRECTORY_STUDENTS = 5000;
 /** Longer than this, a visit is probably a missed checkout. Matches the overview's "needs attention" cutoff. */
@@ -892,11 +894,7 @@ async function handleUpdateVisitDurations(request: Request, env: Env): Promise<R
   if (updates.length === 0) return json({ error: "Select at least one visit to update." }, 400);
   if (updates.length > MAX_BATCH_VISITS) return json({ error: `Select ${MAX_BATCH_VISITS} visits or fewer at a time.` }, 400);
 
-  const placeholders = updates.map(() => "?").join(",");
-  const rows = await env.SIGNAGE_DB.prepare(
-    `SELECT id, checked_in_at, checked_out_at, archived_at FROM library_visits WHERE id IN (${placeholders})`
-  ).bind(...updates.map((update) => update.visitId)).all<EditableVisitRow>();
-  const existing = new Map(rows.results.map((row) => [row.id, row]));
+  const existing = await loadEditableVisits(env, updates.map((update) => update.visitId));
   const now = Date.now();
   const statements: D1PreparedStatement[] = [];
 
@@ -939,12 +937,13 @@ async function handleClearWithDurations(request: Request, env: Env, ctx: Executi
 
   const startedAt = new Map<number, string>();
   if (adjustments.length) {
-    const placeholders = adjustments.map(() => "?").join(",");
-    const rows = await env.SIGNAGE_DB.prepare(
-      `SELECT id, checked_in_at FROM library_visits
-       WHERE id IN (${placeholders}) AND checked_out_at IS NULL AND archived_at IS NULL`
-    ).bind(...adjustments.map((adjustment) => adjustment.visitId)).all<{ id: number; checked_in_at: string }>();
-    for (const row of rows.results) startedAt.set(row.id, row.checked_in_at);
+    const rows = await queryByIds<{ id: number; checked_in_at: string }>(
+      env,
+      adjustments.map((adjustment) => adjustment.visitId),
+      (placeholders) => `SELECT id, checked_in_at FROM library_visits
+       WHERE id IN (${placeholders}) AND checked_out_at IS NULL AND archived_at IS NULL`,
+    );
+    for (const row of rows) startedAt.set(row.id, row.checked_in_at);
   }
 
   const now = Date.now();
@@ -1060,11 +1059,7 @@ async function handleFixVisits(request: Request, env: Env, ctx: ExecutionContext
   if (fixes.length === 0) return json({ error: "Select at least one visit to fix." }, 400);
   if (fixes.length > MAX_BATCH_VISITS) return json({ error: `Fix ${MAX_BATCH_VISITS} visits or fewer at a time.` }, 400);
 
-  const placeholders = fixes.map(() => "?").join(",");
-  const rows = await env.SIGNAGE_DB.prepare(
-    `SELECT id, checked_in_at, checked_out_at, archived_at FROM library_visits WHERE id IN (${placeholders})`
-  ).bind(...fixes.map((fix) => fix.visitId)).all<EditableVisitRow>();
-  const existing = new Map(rows.results.map((row) => [row.id, row]));
+  const existing = await loadEditableVisits(env, fixes.map((fix) => fix.visitId));
   const now = Date.now();
   const planned: { visitId: number; checkedOutAt: string; open: boolean }[] = [];
 
@@ -1091,11 +1086,11 @@ async function handleFixVisits(request: Request, env: Env, ctx: ExecutionContext
   }
 
   const reviewedAt = new Date(now).toISOString();
-  await env.SIGNAGE_DB.batch([
-    ...moves,
-    env.SIGNAGE_DB.prepare(`UPDATE library_visits SET flag_reviewed_at = ? WHERE id IN (${placeholders})`)
-      .bind(reviewedAt, ...planned.map((fix) => fix.visitId)),
-  ]);
+  const reviews = chunk(planned.map((fix) => fix.visitId), MAX_BOUND_PARAMETERS - 1).map((ids) =>
+    env.SIGNAGE_DB.prepare(`UPDATE library_visits SET flag_reviewed_at = ? WHERE id IN (${ids.map(() => "?").join(",")})`)
+      .bind(reviewedAt, ...ids)
+  );
+  await env.SIGNAGE_DB.batch([...moves, ...reviews]);
 
   return json({ ok: true, fixed: planned.length, closed });
 }
@@ -1112,6 +1107,29 @@ async function handleReviewFlag(request: Request, env: Env): Promise<Response> {
     .run();
   if ((result.meta.changes ?? 0) !== 1) return json({ error: "That visit was not found." }, 404);
   return json({ ok: true, visitId, reviewed });
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const pieces: T[][] = [];
+  for (let i = 0; i < items.length; i += size) pieces.push(items.slice(i, i + size));
+  return pieces;
+}
+
+/** Runs an `id IN (...)` query over any number of ids, within D1's bound-parameter limit. */
+async function queryByIds<T>(env: Env, ids: number[], sql: (placeholders: string) => string): Promise<T[]> {
+  const pieces = await Promise.all(chunk(ids, MAX_BOUND_PARAMETERS).map((piece) =>
+    env.SIGNAGE_DB.prepare(sql(piece.map(() => "?").join(","))).bind(...piece).all<T>()
+  ));
+  return pieces.flatMap((piece) => piece.results);
+}
+
+async function loadEditableVisits(env: Env, ids: number[]): Promise<Map<number, EditableVisitRow>> {
+  const rows = await queryByIds<EditableVisitRow>(
+    env,
+    ids,
+    (placeholders) => `SELECT id, checked_in_at, checked_out_at, archived_at FROM library_visits WHERE id IN (${placeholders})`,
+  );
+  return new Map(rows.map((row) => [row.id, row]));
 }
 
 function parseDurationUpdates(value: unknown[]): DurationUpdate[] | null {
