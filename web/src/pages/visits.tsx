@@ -28,7 +28,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PageBody, StatusBadge, StudentAvatar, Toolbar, useConfirm } from "@/components/common"
 import { DurationDialog } from "@/components/visit-dialogs"
-import { REASONS, apiUrl, post, type Visit, type VisitList } from "@/lib/api"
+import { REASONS, apiUrl, post, type ReasonSettings, type Visit, type VisitList } from "@/lib/api"
 import { useCachedGet } from "@/lib/cache"
 import { useDashboard } from "@/lib/dashboard"
 import { useDebouncedValue } from "@/lib/hooks"
@@ -48,7 +48,17 @@ import { cn } from "@/lib/utils"
 const PAGE_SIZE = 50
 type Period = "today" | "7" | "30" | "custom"
 
-const REASON_ITEMS = [{ value: "", label: "All reasons" }, ...REASONS.map((reason) => ({ value: reason, label: reason }))]
+const NO_PARAMS = {}
+
+/** Every reason a visit can carry: the standard ones, the cafe, and anything staff added (even if turned off since). */
+function reasonItems(settings: ReasonSettings | undefined) {
+  const names = new Set<string>(REASONS)
+  if (settings) {
+    names.add(settings.cafeName)
+    for (const reason of settings.reasons) names.add(reason.name)
+  }
+  return [{ value: "", label: "All reasons" }, ...[...names].map((name) => ({ value: name, label: name }))]
+}
 const VIEW_ITEMS = [
   { value: "active", label: "Active records" },
   { value: "archived", label: "Archived" },
@@ -84,6 +94,8 @@ export function VisitsPage() {
 
   const params = { limit: PAGE_SIZE, offset, q: query, reason, from: range.from, to: range.to, archived: archived ? 1 : null }
   const history = useCachedGet<VisitList>("admin-history", params)
+  const reasonSettings = useCachedGet<ReasonSettings>("admin-reasons", NO_PARAMS)
+  const reasonOptions = React.useMemo(() => reasonItems(reasonSettings.data), [reasonSettings.data])
   const data = history.data ?? null
   const loading = history.loading
   const viewKey = JSON.stringify(params)
@@ -188,12 +200,12 @@ export function VisitsPage() {
             onChange={(event) => setSearch(event.target.value)}
           />
         </InputGroup>
-        <Select items={REASON_ITEMS} value={reason} onValueChange={(value) => setReason(String(value ?? ""))}>
+        <Select items={reasonOptions} value={reason} onValueChange={(value) => setReason(String(value ?? ""))}>
           <SelectTrigger aria-label="Reason" className="w-40">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {REASON_ITEMS.map((item) => (
+            {reasonOptions.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>

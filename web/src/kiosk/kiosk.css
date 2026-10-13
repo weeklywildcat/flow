@@ -207,6 +207,18 @@
     box-shadow 180ms ease,
     background-color 180ms ease;
 }
+@keyframes kiosk-priority-glow {
+  0%,
+  100% {
+    box-shadow: 0 8px 24px -8px rgb(217 119 6 / 0.45);
+  }
+  50% {
+    box-shadow: 0 12px 36px -6px rgb(217 119 6 / 0.7);
+  }
+}
+.kiosk-priority {
+  animation: kiosk-priority-glow 2.6s ease-in-out infinite;
+}
 .kiosk-tile:active {
   transform: scale(0.96);
 }
@@ -218,7 +230,8 @@
   .kiosk-scanline,
   .kiosk-scan-hit,
   .kiosk-bars-dance rect,
-  .kiosk-shake {
+  .kiosk-shake,
+  .kiosk-priority {
     animation: none;
   }
 }

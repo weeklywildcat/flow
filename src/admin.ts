@@ -1,4 +1,13 @@
-import libraryApp, { closeVisitAt, ensureVisitArchiveColumns } from "./library";
+import libraryApp, {
+  CAFE_REASON,
+  CAFE_SCHEDULE_LABEL,
+  closeVisitAt,
+  ensureVisitArchiveColumns,
+  getReasonSettings,
+  isCafeActive,
+  parseReasonSettings,
+  saveReasonSettings,
+} from "./library";
 
 const TIMEZONE = "America/New_York" as const;
 
@@ -103,6 +112,7 @@ const ROUTES: Record<string, Route> = {
   "/api/library/admin-flagged-visits": { GET: handleFlaggedVisits, error: "Could not load flagged visits." },
   "/api/library/admin-fix-visits": { POST: handleFixVisits, error: "Could not fix those visits." },
   "/api/library/admin-review-flag": { POST: handleReviewFlag, error: "Could not update that visit." },
+  "/api/library/admin-reasons": { GET: (_request, env) => handleReasons(env), POST: handleSaveReasons, error: "Could not save the reasons." },
   "/api/library/admin-name-check": { POST: handleNameCheck, error: "Could not update that student." },
 };
 
@@ -1093,6 +1103,22 @@ async function handleFixVisits(request: Request, env: Env, ctx: ExecutionContext
   await env.SIGNAGE_DB.batch([...moves, ...reviews]);
 
   return json({ ok: true, fixed: planned.length, closed });
+}
+
+async function reasonsPayload(env: Env): Promise<Response> {
+  const settings = await getReasonSettings(env);
+  return json({ ...settings, cafeActive: isCafeActive(settings.cafeMode), cafeName: CAFE_REASON, cafeSchedule: CAFE_SCHEDULE_LABEL });
+}
+
+function handleReasons(env: Env): Promise<Response> {
+  return reasonsPayload(env);
+}
+
+async function handleSaveReasons(request: Request, env: Env): Promise<Response> {
+  const settings = parseReasonSettings(await readJsonBody(request));
+  if (typeof settings === "string") return json({ error: settings }, 400);
+  await saveReasonSettings(env, settings);
+  return reasonsPayload(env);
 }
 
 async function handleReviewFlag(request: Request, env: Env): Promise<Response> {

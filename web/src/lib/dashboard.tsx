@@ -1,6 +1,6 @@
 import * as React from "react"
 
-export type PageId = "now" | "visits" | "flagged" | "students" | "insights" | "devices"
+export type PageId = "now" | "visits" | "flagged" | "students" | "insights" | "reasons" | "devices"
 
 export const PAGES: Record<PageId, { title: string; description: string }> = {
   now: { title: "Now", description: "Who is in the library right now" },
@@ -8,6 +8,7 @@ export const PAGES: Record<PageId, { title: string; description: string }> = {
   flagged: { title: "Flagged", description: "Visits that look like a missed checkout" },
   students: { title: "Students", description: "The student directory" },
   insights: { title: "Insights", description: "Traffic, patterns, and milestones" },
+  reasons: { title: "Reasons", description: "What students can pick when they check in" },
   devices: { title: "Devices & data", description: "Kiosks, Google Sheets sync, and exports" },
 }
 

@@ -2,6 +2,7 @@ import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
 import {
   Analytics01Icon,
   Clock01Icon,
+  Coffee01Icon,
   ComputerIcon,
   Flag02Icon,
   LinkSquare02Icon,
@@ -38,7 +39,13 @@ const GROUPS: { label: string; items: { id: PageId; icon: IconSvgElement }[] }[]
     ],
   },
   { label: "Insights", items: [{ id: "insights", icon: Analytics01Icon }] },
-  { label: "System", items: [{ id: "devices", icon: ComputerIcon }] },
+  {
+    label: "System",
+    items: [
+      { id: "reasons", icon: Coffee01Icon },
+      { id: "devices", icon: ComputerIcon },
+    ],
+  },
 ]
 
 export function AppSidebar() {

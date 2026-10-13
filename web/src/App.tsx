@@ -16,6 +16,7 @@ import { useVisibleInterval } from "@/lib/hooks"
 import { DevicesPage } from "@/pages/devices"
 import { FlaggedPage } from "@/pages/flagged"
 import { NowPage } from "@/pages/now"
+import { ReasonsPage } from "@/pages/reasons"
 import { StudentsPage } from "@/pages/students"
 import { VisitsPage } from "@/pages/visits"
 
@@ -113,6 +114,7 @@ export function App() {
                     <InsightsPage />
                   </React.Suspense>
                 ) : null}
+                {page === "reasons" ? <ReasonsPage /> : null}
                 {page === "devices" ? <DevicesPage /> : null}
               </main>
             </SidebarInset>

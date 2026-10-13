@@ -3,6 +3,7 @@ import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
 import {
   Analytics01Icon,
   Clock01Icon,
+  Coffee01Icon,
   ComputerIcon,
   Flag02Icon,
   StudentsIcon,
@@ -32,6 +33,7 @@ const PAGE_ICONS: Record<PageId, IconSvgElement> = {
   flagged: Flag02Icon,
   students: StudentsIcon,
   insights: Analytics01Icon,
+  reasons: Coffee01Icon,
   devices: ComputerIcon,
 }
 

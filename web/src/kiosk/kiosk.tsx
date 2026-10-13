@@ -7,6 +7,7 @@ import {
   Books01Icon,
   BulbIcon,
   Cancel01Icon,
+  Coffee01Icon,
   LockKeyIcon,
   Logout03Icon,
   PrinterIcon,
@@ -63,6 +64,9 @@ const REASONS_TIMEOUT_MS = 20000
 const NEW_STUDENT_TIMEOUT_MS = 60000
 const NAME_CHECK_TIMEOUT_MS = 60000
 
+/** The priority reason: staff-controlled, shown first and larger while it is active. */
+const CAFE_REASON = "Wildcat Cafe"
+
 // Each reason gets its own colour so the grid reads at a glance. Class names stay literal
 // so Tailwind can see them.
 const REASON_STYLES: Record<string, { icon: IconSvgElement; tile: string; badge: string; wave: string }> = {
@@ -72,6 +76,29 @@ const REASON_STYLES: Record<string, { icon: IconSvgElement; tile: string; badge:
   Lunch: { icon: Restaurant01Icon, tile: "bg-orange-500/10 hover:bg-orange-500/15 ring-orange-500/20", badge: "bg-orange-500", wave: "#f97316" },
   Meeting: { icon: UserGroupIcon, tile: "bg-teal-500/10 hover:bg-teal-500/15 ring-teal-500/20", badge: "bg-teal-500", wave: "#14b8a6" },
   Other: { icon: SparklesIcon, tile: "bg-pink-500/10 hover:bg-pink-500/15 ring-pink-500/20", badge: "bg-pink-500", wave: "#ec4899" },
+  [CAFE_REASON]: {
+    icon: Coffee01Icon,
+    tile: "bg-gradient-to-br from-amber-600 to-orange-700 text-white ring-amber-400/50 hover:brightness-110",
+    badge: "bg-white/20",
+    wave: "#d97706",
+  },
+}
+
+// Reasons staff add themselves get a stable colour from this palette, picked by name.
+const CUSTOM_REASON_STYLES: { tile: string; badge: string; wave: string }[] = [
+  { tile: "bg-rose-500/10 hover:bg-rose-500/15 ring-rose-500/20", badge: "bg-rose-500", wave: "#f43f5e" },
+  { tile: "bg-indigo-500/10 hover:bg-indigo-500/15 ring-indigo-500/20", badge: "bg-indigo-500", wave: "#6366f1" },
+  { tile: "bg-emerald-500/10 hover:bg-emerald-500/15 ring-emerald-500/20", badge: "bg-emerald-500", wave: "#10b981" },
+  { tile: "bg-cyan-500/10 hover:bg-cyan-500/15 ring-cyan-500/20", badge: "bg-cyan-500", wave: "#06b6d4" },
+  { tile: "bg-fuchsia-500/10 hover:bg-fuchsia-500/15 ring-fuchsia-500/20", badge: "bg-fuchsia-500", wave: "#d946ef" },
+  { tile: "bg-lime-500/10 hover:bg-lime-500/15 ring-lime-500/25", badge: "bg-lime-500", wave: "#84cc16" },
+]
+
+function reasonStyle(reason: string): { icon: IconSvgElement; tile: string; badge: string; wave: string } {
+  if (Object.hasOwn(REASON_STYLES, reason)) return REASON_STYLES[reason]
+  let hash = 0
+  for (const char of reason) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
+  return { icon: SparklesIcon, ...CUSTOM_REASON_STYLES[hash % CUSTOM_REASON_STYLES.length] }
 }
 
 const FOOTER: Record<Screen["kind"], { hint: string; status: string }> = {
@@ -408,13 +435,14 @@ export function Kiosk() {
     clearTimer("auto")
     busy.current = true
     setSelectedReason(reason)
-    effects.current?.choiceWave(button, (REASON_STYLES[reason] ?? REASON_STYLES.Other).wave)
+    effects.current?.choiceWave(button, reasonStyle(reason).wave)
     const firstName = screen.kind === "reasons" ? screen.firstName : "there"
     try {
       // Give the wave a head start so the success screen lands inside it.
       await sleep(180)
       await kioskPost("/api/library/checkin", { barcode: barcode.current, reason })
-      if (reason === "Lunch") showSuccess("checkin", `Enjoy your lunch, ${firstName}!`, "You’re all set.", 900)
+      if (reason === CAFE_REASON) showSuccess("checkin", "Welcome to the Wildcat Cafe!", `Enjoy, ${firstName}. Scan out when you leave.`, 2800, "Use the same ID to check out.")
+      else if (reason === "Lunch") showSuccess("checkin", `Enjoy your lunch, ${firstName}!`, "You’re all set.", 900)
       else showSuccess("checkin", `You’re in, ${firstName}!`, "Scan out when you leave.", 2300, "Use the same ID to check out.")
     } catch (error) {
       showError("Could not check in", message(error, "Try again or see the librarian."))
@@ -537,8 +565,9 @@ export function Kiosk() {
                 </div>
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                   {screen.reasons.map((reason) => {
-                    const style = REASON_STYLES[reason] ?? REASON_STYLES.Other
+                    const style = reasonStyle(reason)
                     const chosen = selectedReason === reason
+                    const priority = reason === CAFE_REASON
                     return (
                       <button
                         key={reason}
@@ -546,16 +575,20 @@ export function Kiosk() {
                         disabled={selectedReason !== null}
                         onClick={(event) => void chooseReason(reason, event.currentTarget)}
                         className={cn(
-                          "kiosk-tile flex min-h-[clamp(5.5rem,15vh,8rem)] flex-col items-center justify-center gap-2.5 rounded-3xl p-3 text-center ring-1 outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
+                          "kiosk-tile flex flex-col items-center justify-center rounded-3xl text-center ring-1 outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
+                          priority
+                            ? "kiosk-priority col-span-full min-h-[clamp(6.5rem,17vh,10rem)] gap-2 p-4 ring-2"
+                            : "min-h-[clamp(5.5rem,15vh,8rem)] gap-2.5 p-3",
                           style.tile,
                           chosen && "scale-[1.03] shadow-xl ring-2",
                           selectedReason !== null && !chosen && "opacity-40"
                         )}
                       >
-                        <span className={cn("flex size-12 items-center justify-center rounded-2xl text-white shadow-md", style.badge)}>
-                          <HugeiconsIcon icon={chosen ? Tick02Icon : style.icon} strokeWidth={2} className="size-6" />
+                        <span className={cn("flex items-center justify-center text-white shadow-md", priority ? "size-14 rounded-3xl" : "size-12 rounded-2xl", style.badge)}>
+                          <HugeiconsIcon icon={chosen ? Tick02Icon : style.icon} strokeWidth={2} className={priority ? "size-8" : "size-6"} />
                         </span>
-                        <span className="text-lg font-semibold">{reason}</span>
+                        <span className={cn("font-semibold", priority ? "text-2xl" : "text-lg")}>{reason}</span>
+                        {priority ? <span className="-mt-1 text-sm font-medium text-white/85">Open now</span> : null}
                       </button>
                     )
                   })}

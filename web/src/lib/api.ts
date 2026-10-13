@@ -213,5 +213,15 @@ export type Stats = {
   }
 }
 
+export type CafeMode = "auto" | "on" | "off"
+export type ReasonSetting = { name: string; enabled: boolean }
+export type ReasonSettings = {
+  reasons: ReasonSetting[]
+  cafeMode: CafeMode
+  cafeActive: boolean
+  cafeName: string
+  cafeSchedule: string
+}
+
 export const REASONS = ["Class work", "Printing", "Book checkout", "Lunch", "Meeting", "Other"]
 export const GRADES = ["9", "10", "11", "12"]

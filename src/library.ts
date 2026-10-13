@@ -104,7 +104,7 @@ type SheetRetryResult = {
 };
 
 const TIMEZONE = "America/New_York" as const;
-const REASONS = [
+const DEFAULT_REASONS = [
   "Class work",
   "Printing",
   "Book checkout",
@@ -112,6 +112,14 @@ const REASONS = [
   "Meeting",
   "Other",
 ];
+/** A priority reason: it shows first and larger on the kiosk while it is active, and is not part of the editable list. */
+export const CAFE_REASON = "Wildcat Cafe";
+export const CAFE_SCHEDULE_LABEL = "Tuesdays and Thursdays, 7:30 to 8:10 AM";
+const CAFE_DAYS = new Set(["Tue", "Thu"]);
+const CAFE_START_MINUTE = 7 * 60 + 30;
+const CAFE_END_MINUTE = 8 * 60 + 10;
+const MAX_REASONS = 12;
+const MAX_REASON_LENGTH = 30;
 const GRADE_OPTIONS = ["9", "10", "11", "12"];
 
 const API_HEADERS = {
@@ -237,6 +245,117 @@ export default {
   },
 } satisfies ExportedHandler<LibraryEnv>;
 
+export type CafeMode = "auto" | "on" | "off";
+export type ReasonSetting = { name: string; enabled: boolean };
+export type ReasonSettings = { reasons: ReasonSetting[]; cafeMode: CafeMode };
+
+// Staff-editable kiosk settings live in a key/value table that creates itself on first use, so
+// existing databases pick it up without running the schema file.
+let settingsTable: Promise<void> | null = null;
+
+function ensureSettingsTable(env: LibraryEnv): Promise<void> {
+  if (!settingsTable) {
+    settingsTable = env.SIGNAGE_DB.prepare(
+      `CREATE TABLE IF NOT EXISTS library_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`
+    ).run().then(() => undefined).catch((error) => {
+      settingsTable = null;
+      throw error;
+    });
+  }
+  return settingsTable;
+}
+
+function defaultReasonSettings(): ReasonSettings {
+  return { reasons: DEFAULT_REASONS.map((name) => ({ name, enabled: true })), cafeMode: "auto" };
+}
+
+export async function getReasonSettings(env: LibraryEnv): Promise<ReasonSettings> {
+  await ensureSettingsTable(env);
+  const rows = await env.SIGNAGE_DB.prepare(
+    "SELECT key, value FROM library_settings WHERE key IN ('reasons', 'cafe_mode')"
+  ).all<{ key: string; value: string }>();
+  const stored = new Map(rows.results.map((row) => [row.key, row.value]));
+  const settings = defaultReasonSettings();
+
+  const cafeMode = stored.get("cafe_mode");
+  if (cafeMode === "on" || cafeMode === "off" || cafeMode === "auto") settings.cafeMode = cafeMode;
+
+  try {
+    const parsed = checkReasons(JSON.parse(stored.get("reasons") ?? "null"));
+    if (typeof parsed !== "string") settings.reasons = parsed;
+  } catch {
+    // Unreadable stored value: keep the defaults rather than leaving the kiosk with no reasons.
+  }
+  return settings;
+}
+
+/** Validates a reason list from staff. Returns the cleaned list, or a message to show them. */
+function checkReasons(value: unknown): ReasonSetting[] | string {
+  if (!Array.isArray(value)) return "Invalid request body.";
+  if (value.length > MAX_REASONS) return `Use ${MAX_REASONS} reasons or fewer.`;
+
+  const seen = new Set<string>();
+  const reasons: ReasonSetting[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.name !== "string" || typeof entry.enabled !== "boolean") return "Invalid request body.";
+    const name = normalizeMessage(entry.name, MAX_REASON_LENGTH + 1);
+    if (name.length === 0) return "Every reason needs a name.";
+    if (name.length > MAX_REASON_LENGTH) return `Keep reason names to ${MAX_REASON_LENGTH} characters or fewer.`;
+    const key = name.toLowerCase();
+    if (key === CAFE_REASON.toLowerCase()) return `${CAFE_REASON} is managed separately.`;
+    if (seen.has(key)) return `"${name}" is listed twice.`;
+    seen.add(key);
+    reasons.push({ name, enabled: entry.enabled });
+  }
+  if (!reasons.some((reason) => reason.enabled)) return "Keep at least one reason turned on.";
+  return reasons;
+}
+
+export function parseReasonSettings(body: unknown): ReasonSettings | string {
+  if (!isRecord(body)) return "Invalid request body.";
+  if (body.cafeMode !== "auto" && body.cafeMode !== "on" && body.cafeMode !== "off") return "Invalid request body.";
+  const reasons = checkReasons(body.reasons);
+  return typeof reasons === "string" ? reasons : { reasons, cafeMode: body.cafeMode };
+}
+
+export async function saveReasonSettings(env: LibraryEnv, settings: ReasonSettings): Promise<void> {
+  await ensureSettingsTable(env);
+  const now = new Date().toISOString();
+  const upsert = (key: string, value: string) =>
+    env.SIGNAGE_DB.prepare(
+      `INSERT INTO library_settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    ).bind(key, value, now);
+  await env.SIGNAGE_DB.batch([upsert("reasons", JSON.stringify(settings.reasons)), upsert("cafe_mode", settings.cafeMode)]);
+}
+
+/** "auto" opens the cafe on its weekly schedule in school time; "on" and "off" override it. */
+export function isCafeActive(mode: CafeMode, now = new Date()): boolean {
+  if (mode !== "auto") return mode === "on";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TIMEZONE,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const minute = Number(values.hour) * 60 + Number(values.minute);
+  return CAFE_DAYS.has(values.weekday) && minute >= CAFE_START_MINUTE && minute < CAFE_END_MINUTE;
+}
+
+/** The reasons the kiosk offers right now: the cafe first while it is active, then every reason turned on. */
+async function getKioskReasons(env: LibraryEnv): Promise<string[]> {
+  const settings = await getReasonSettings(env);
+  const reasons = settings.reasons.filter((reason) => reason.enabled).map((reason) => reason.name);
+  if (isCafeActive(settings.cafeMode)) reasons.unshift(CAFE_REASON);
+  return reasons.length > 0 ? reasons : DEFAULT_REASONS;
+}
+
 async function handleScan(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
   const body = await readJsonBody(request);
   if (!isRecord(body)) return json({ error: "Invalid request body." }, 400);
@@ -246,7 +365,7 @@ async function handleScan(request: Request, env: LibraryEnv, ctx: ExecutionConte
 
   const scanLookup = await findStudentAndActiveVisit(env, barcode);
   if (!scanLookup) {
-    return json({ mode: "new_student", barcode, grades: GRADE_OPTIONS, reasons: REASONS });
+    return json({ mode: "new_student", barcode, grades: GRADE_OPTIONS, reasons: await getKioskReasons(env) });
   }
 
   const { student, activeVisit } = scanLookup;
@@ -271,7 +390,7 @@ async function handleScan(request: Request, env: LibraryEnv, ctx: ExecutionConte
     student: publicStudent(student),
     recentlyCleared,
     nameCheck,
-    reasons: REASONS,
+    reasons: await getKioskReasons(env),
   });
 }
 
@@ -463,7 +582,7 @@ async function handleCreateStudent(request: Request, env: LibraryEnv, ctx: Execu
     actor,
   });
 
-  return json({ ok: true, mode: "checkin", student: publicStudent(student), reasons: REASONS, state: await getCurrentState(env, false) });
+  return json({ ok: true, mode: "checkin", student: publicStudent(student), reasons: await getKioskReasons(env), state: await getCurrentState(env, false) });
 }
 
 async function handleCreateKioskPairing(request: Request, env: LibraryEnv): Promise<Response> {
@@ -1354,6 +1473,13 @@ async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
     ),
     env.SIGNAGE_DB.prepare(
       "CREATE INDEX IF NOT EXISTS idx_library_sheet_events_pending ON library_sheet_events(synced_at, attempts, id)"
+    ),
+    env.SIGNAGE_DB.prepare(
+      `CREATE TABLE IF NOT EXISTS library_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`
     ),
     env.SIGNAGE_DB.prepare(
       `CREATE TABLE IF NOT EXISTS library_kiosk_pairing_codes (
