@@ -64,7 +64,7 @@ export type KioskStudent = { studentId: string; firstName: string; lastName: str
 
 export type ScanResult =
   | { mode: "checkout"; student: KioskStudent; nameCheck?: boolean }
-  | { mode: "checkin"; student: KioskStudent; recentlyCleared?: boolean; nameCheck?: boolean; reasons: string[] }
-  | { mode: "new_student"; barcode: string; grades: string[]; reasons: string[] }
+  | { mode: "checkin"; student: KioskStudent; recentlyCleared?: boolean; nameCheck?: boolean; reasons: string[]; priority?: string[] }
+  | { mode: "new_student"; barcode: string; grades: string[]; reasons: string[]; priority?: string[] }
 
 export type FunFacts = { visitsThisMonth: number; minutesThisYear: number }

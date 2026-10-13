@@ -69,11 +69,17 @@ const CAFE_REASON = "Wildcat Cafe"
 
 // Each reason gets its own colour so the grid reads at a glance. Class names stay literal
 // so Tailwind can see them.
-const REASON_STYLES: Record<string, { icon: IconSvgElement; tile: string; badge: string; wave: string }> = {
+const REASON_STYLES: Record<string, { icon: IconSvgElement; tile: string; badge: string; wave: string; priorityTile?: string }> = {
   "Class work": { icon: BookOpen01Icon, tile: "bg-sky-500/10 hover:bg-sky-500/15 ring-sky-500/20", badge: "bg-sky-500", wave: "#0ea5e9" },
   Printing: { icon: PrinterIcon, tile: "bg-violet-500/10 hover:bg-violet-500/15 ring-violet-500/20", badge: "bg-violet-500", wave: "#8b5cf6" },
   "Book checkout": { icon: Books01Icon, tile: "bg-amber-500/10 hover:bg-amber-500/15 ring-amber-500/25", badge: "bg-amber-500", wave: "#f59e0b" },
-  Lunch: { icon: Restaurant01Icon, tile: "bg-orange-500/10 hover:bg-orange-500/15 ring-orange-500/20", badge: "bg-orange-500", wave: "#f97316" },
+  Lunch: {
+    icon: Restaurant01Icon,
+    tile: "bg-orange-500/10 hover:bg-orange-500/15 ring-orange-500/20",
+    priorityTile: "bg-gradient-to-br from-orange-500 to-red-600 text-white ring-orange-300/50 hover:brightness-110",
+    badge: "bg-orange-500",
+    wave: "#f97316",
+  },
   Meeting: { icon: UserGroupIcon, tile: "bg-teal-500/10 hover:bg-teal-500/15 ring-teal-500/20", badge: "bg-teal-500", wave: "#14b8a6" },
   Other: { icon: SparklesIcon, tile: "bg-pink-500/10 hover:bg-pink-500/15 ring-pink-500/20", badge: "bg-pink-500", wave: "#ec4899" },
   [CAFE_REASON]: {
@@ -94,7 +100,10 @@ const CUSTOM_REASON_STYLES: { tile: string; badge: string; wave: string }[] = [
   { tile: "bg-lime-500/10 hover:bg-lime-500/15 ring-lime-500/25", badge: "bg-lime-500", wave: "#84cc16" },
 ]
 
-function reasonStyle(reason: string): { icon: IconSvgElement; tile: string; badge: string; wave: string } {
+/** The line under a priority tile's name. */
+const PRIORITY_NOTES: Record<string, string> = { [CAFE_REASON]: "Open now", Lunch: "Lunch time" }
+
+function reasonStyle(reason: string): { icon: IconSvgElement; tile: string; badge: string; wave: string; priorityTile?: string } {
   if (Object.hasOwn(REASON_STYLES, reason)) return REASON_STYLES[reason]
   let hash = 0
   for (const char of reason) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
@@ -130,6 +139,8 @@ export function Kiosk() {
   const [screenKey, setScreenKey] = React.useState(0)
   const [reading, setReading] = React.useState(false)
   const [selectedReason, setSelectedReason] = React.useState<string | null>(null)
+  // Reasons the server wants drawn larger right now, from the latest scan.
+  const [priorityReasons, setPriorityReasons] = React.useState<string[]>([])
   // Bumped on every scan to replay the barcode icon's bounce and bar wave.
   const [scanHit, setScanHit] = React.useState(0)
   const [funFacts, setFunFacts] = React.useState<FunFacts | null | "error">(null)
@@ -308,6 +319,7 @@ export function Kiosk() {
     try {
       const data = await kioskPost<ScanResult>("/api/library/scan", { barcode: scanned, autoCheckout: true })
       clearTimer("working")
+      setPriorityReasons(data.mode === "checkout" ? [] : data.priority ?? [])
       if (data.mode === "checkout") {
         await settle()
         if (data.nameCheck) askForName(data.student, { mode: "checkout" })
@@ -456,10 +468,11 @@ export function Kiosk() {
     clearTimer("auto")
     busy.current = true
     try {
-      const data = await kioskPost<{ student: KioskStudent; reasons?: string[] }>("/api/library/create-student", {
+      const data = await kioskPost<{ student: KioskStudent; reasons?: string[]; priority?: string[] }>("/api/library/create-student", {
         barcode: barcode.current,
         ...form,
       })
+      setPriorityReasons(data.priority ?? [])
       showReasons(data.student, data.reasons ?? reasons)
     } catch (error) {
       showError("Could not save", message(error, "Try again or see the librarian."), 3500)
@@ -567,7 +580,7 @@ export function Kiosk() {
                   {screen.reasons.map((reason) => {
                     const style = reasonStyle(reason)
                     const chosen = selectedReason === reason
-                    const priority = reason === CAFE_REASON
+                    const priority = priorityReasons.includes(reason)
                     return (
                       <button
                         key={reason}
@@ -579,16 +592,16 @@ export function Kiosk() {
                           priority
                             ? "kiosk-priority col-span-full min-h-[clamp(6.5rem,17vh,10rem)] gap-2 p-4 ring-2"
                             : "min-h-[clamp(5.5rem,15vh,8rem)] gap-2.5 p-3",
-                          style.tile,
+                          priority ? style.priorityTile ?? style.tile : style.tile,
                           chosen && "scale-[1.03] shadow-xl ring-2",
                           selectedReason !== null && !chosen && "opacity-40"
                         )}
                       >
-                        <span className={cn("flex items-center justify-center text-white shadow-md", priority ? "size-14 rounded-3xl" : "size-12 rounded-2xl", style.badge)}>
+                        <span className={cn("flex items-center justify-center text-white shadow-md", priority ? "size-14 rounded-3xl bg-white/20" : cn("size-12 rounded-2xl", style.badge))}>
                           <HugeiconsIcon icon={chosen ? Tick02Icon : style.icon} strokeWidth={2} className={priority ? "size-8" : "size-6"} />
                         </span>
                         <span className={cn("font-semibold", priority ? "text-2xl" : "text-lg")}>{reason}</span>
-                        {priority ? <span className="-mt-1 text-sm font-medium text-white/85">Open now</span> : null}
+                        {priority ? <span className="-mt-1 text-sm font-medium text-white/85">{PRIORITY_NOTES[reason] ?? "Right now"}</span> : null}
                       </button>
                     )
                   })}

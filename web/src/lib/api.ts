@@ -221,6 +221,7 @@ export type ReasonSettings = {
   cafeActive: boolean
   cafeName: string
   cafeSchedule: string
+  lunchSchedule: string
 }
 
 export const REASONS = ["Class work", "Printing", "Book checkout", "Lunch", "Meeting", "Other"]

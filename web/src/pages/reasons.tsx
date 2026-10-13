@@ -171,6 +171,7 @@ function ReasonsCard({ settings, onSaved }: { settings: ReasonSettings; onSaved:
         <CardTitle>Check-in reasons</CardTitle>
         <CardDescription>
           Students pick one of the reasons turned on here. Turning one off hides it from kiosks but keeps it in past visits.
+          While Lunch is on, it also becomes a larger priority tile {settings.lunchSchedule}.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">

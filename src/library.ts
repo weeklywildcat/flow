@@ -118,6 +118,14 @@ export const CAFE_SCHEDULE_LABEL = "Tuesdays and Thursdays, 7:30 to 8:10 AM";
 const CAFE_DAYS = new Set(["Tue", "Thu"]);
 const CAFE_START_MINUTE = 7 * 60 + 30;
 const CAFE_END_MINUTE = 8 * 60 + 10;
+/** On school weekdays, Lunch becomes a priority option around the two lunch periods. */
+export const LUNCH_REASON = "Lunch";
+export const LUNCH_SCHEDULE_LABEL = "weekdays, 11:45 AM to 12:05 PM and 1:20 to 1:40 PM";
+const LUNCH_DAYS = new Set(["Mon", "Tue", "Wed", "Thu", "Fri"]);
+const LUNCH_WINDOWS: [start: number, end: number][] = [
+  [11 * 60 + 45, 12 * 60 + 5],
+  [13 * 60 + 20, 13 * 60 + 40],
+];
 const MAX_REASONS = 12;
 const MAX_REASON_LENGTH = 30;
 const GRADE_OPTIONS = ["9", "10", "11", "12"];
@@ -256,7 +264,7 @@ let settingsTable: Promise<void> | null = null;
 function ensureSettingsTable(env: LibraryEnv): Promise<void> {
   if (!settingsTable) {
     settingsTable = env.SIGNAGE_DB.prepare(
-      `CREATE TABLE IF NOT EXISTS library_settings (
+      `CREATE TABLE IF NOT EXISTS library_kiosk_settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -276,7 +284,7 @@ function defaultReasonSettings(): ReasonSettings {
 export async function getReasonSettings(env: LibraryEnv): Promise<ReasonSettings> {
   await ensureSettingsTable(env);
   const rows = await env.SIGNAGE_DB.prepare(
-    "SELECT key, value FROM library_settings WHERE key IN ('reasons', 'cafe_mode')"
+    "SELECT key, value FROM library_kiosk_settings WHERE key IN ('reasons', 'cafe_mode')"
   ).all<{ key: string; value: string }>();
   const stored = new Map(rows.results.map((row) => [row.key, row.value]));
   const settings = defaultReasonSettings();
@@ -327,15 +335,14 @@ export async function saveReasonSettings(env: LibraryEnv, settings: ReasonSettin
   const now = new Date().toISOString();
   const upsert = (key: string, value: string) =>
     env.SIGNAGE_DB.prepare(
-      `INSERT INTO library_settings (key, value, updated_at) VALUES (?, ?, ?)
+      `INSERT INTO library_kiosk_settings (key, value, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
     ).bind(key, value, now);
   await env.SIGNAGE_DB.batch([upsert("reasons", JSON.stringify(settings.reasons)), upsert("cafe_mode", settings.cafeMode)]);
 }
 
-/** "auto" opens the cafe on its weekly schedule in school time; "on" and "off" override it. */
-export function isCafeActive(mode: CafeMode, now = new Date()): boolean {
-  if (mode !== "auto") return mode === "on";
+/** The weekday ("Mon") and minutes since midnight in school time. */
+function schoolClock(now: Date): { weekday: string; minute: number } {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: TIMEZONE,
     weekday: "short",
@@ -344,16 +351,35 @@ export function isCafeActive(mode: CafeMode, now = new Date()): boolean {
     hourCycle: "h23",
   }).formatToParts(now);
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  const minute = Number(values.hour) * 60 + Number(values.minute);
-  return CAFE_DAYS.has(values.weekday) && minute >= CAFE_START_MINUTE && minute < CAFE_END_MINUTE;
+  return { weekday: values.weekday, minute: Number(values.hour) * 60 + Number(values.minute) };
 }
 
-/** The reasons the kiosk offers right now: the cafe first while it is active, then every reason turned on. */
-async function getKioskReasons(env: LibraryEnv): Promise<string[]> {
+/** "auto" opens the cafe on its weekly schedule in school time; "on" and "off" override it. */
+export function isCafeActive(mode: CafeMode, now = new Date()): boolean {
+  if (mode !== "auto") return mode === "on";
+  const { weekday, minute } = schoolClock(now);
+  return CAFE_DAYS.has(weekday) && minute >= CAFE_START_MINUTE && minute < CAFE_END_MINUTE;
+}
+
+export function isLunchPriorityTime(now = new Date()): boolean {
+  const { weekday, minute } = schoolClock(now);
+  return LUNCH_DAYS.has(weekday) && LUNCH_WINDOWS.some(([start, end]) => minute >= start && minute < end);
+}
+
+/**
+ * The reasons the kiosk offers right now. Priority reasons come first and are listed again in
+ * `priority` so the kiosk can draw them larger: the cafe while it is open, and Lunch around the
+ * lunch periods (unless staff turned Lunch off).
+ */
+async function getKioskReasons(env: LibraryEnv): Promise<{ reasons: string[]; priority: string[] }> {
   const settings = await getReasonSettings(env);
-  const reasons = settings.reasons.filter((reason) => reason.enabled).map((reason) => reason.name);
-  if (isCafeActive(settings.cafeMode)) reasons.unshift(CAFE_REASON);
-  return reasons.length > 0 ? reasons : DEFAULT_REASONS;
+  const enabled = settings.reasons.filter((reason) => reason.enabled).map((reason) => reason.name);
+  const priority: string[] = [];
+  if (isCafeActive(settings.cafeMode)) priority.push(CAFE_REASON);
+  const lunch = enabled.find((name) => name.toLowerCase() === LUNCH_REASON.toLowerCase());
+  if (lunch && isLunchPriorityTime()) priority.push(lunch);
+  const reasons = [...priority, ...enabled.filter((name) => !priority.includes(name))];
+  return { reasons: reasons.length > 0 ? reasons : DEFAULT_REASONS, priority };
 }
 
 async function handleScan(request: Request, env: LibraryEnv, ctx: ExecutionContext): Promise<Response> {
@@ -365,7 +391,7 @@ async function handleScan(request: Request, env: LibraryEnv, ctx: ExecutionConte
 
   const scanLookup = await findStudentAndActiveVisit(env, barcode);
   if (!scanLookup) {
-    return json({ mode: "new_student", barcode, grades: GRADE_OPTIONS, reasons: await getKioskReasons(env) });
+    return json({ mode: "new_student", barcode, grades: GRADE_OPTIONS, ...(await getKioskReasons(env)) });
   }
 
   const { student, activeVisit } = scanLookup;
@@ -390,7 +416,7 @@ async function handleScan(request: Request, env: LibraryEnv, ctx: ExecutionConte
     student: publicStudent(student),
     recentlyCleared,
     nameCheck,
-    reasons: await getKioskReasons(env),
+    ...(await getKioskReasons(env)),
   });
 }
 
@@ -582,7 +608,7 @@ async function handleCreateStudent(request: Request, env: LibraryEnv, ctx: Execu
     actor,
   });
 
-  return json({ ok: true, mode: "checkin", student: publicStudent(student), reasons: await getKioskReasons(env), state: await getCurrentState(env, false) });
+  return json({ ok: true, mode: "checkin", student: publicStudent(student), ...(await getKioskReasons(env)), state: await getCurrentState(env, false) });
 }
 
 async function handleCreateKioskPairing(request: Request, env: LibraryEnv): Promise<Response> {
@@ -1475,7 +1501,7 @@ async function ensureLibraryTables(env: LibraryEnv): Promise<void> {
       "CREATE INDEX IF NOT EXISTS idx_library_sheet_events_pending ON library_sheet_events(synced_at, attempts, id)"
     ),
     env.SIGNAGE_DB.prepare(
-      `CREATE TABLE IF NOT EXISTS library_settings (
+      `CREATE TABLE IF NOT EXISTS library_kiosk_settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL

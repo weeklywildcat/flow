@@ -1,6 +1,7 @@
 import libraryApp, {
   CAFE_REASON,
   CAFE_SCHEDULE_LABEL,
+  LUNCH_SCHEDULE_LABEL,
   closeVisitAt,
   ensureVisitArchiveColumns,
   getReasonSettings,
@@ -1107,7 +1108,7 @@ async function handleFixVisits(request: Request, env: Env, ctx: ExecutionContext
 
 async function reasonsPayload(env: Env): Promise<Response> {
   const settings = await getReasonSettings(env);
-  return json({ ...settings, cafeActive: isCafeActive(settings.cafeMode), cafeName: CAFE_REASON, cafeSchedule: CAFE_SCHEDULE_LABEL });
+  return json({ ...settings, cafeActive: isCafeActive(settings.cafeMode), cafeName: CAFE_REASON, cafeSchedule: CAFE_SCHEDULE_LABEL, lunchSchedule: LUNCH_SCHEDULE_LABEL });
 }
 
 function handleReasons(env: Env): Promise<Response> {

@@ -78,9 +78,11 @@ CREATE TABLE IF NOT EXISTS library_kiosk_devices (
 CREATE INDEX IF NOT EXISTS idx_library_kiosk_devices_active
   ON library_kiosk_devices(revoked_at, last_seen_at);
 
--- Staff-editable kiosk settings (the reason list and the Wildcat Cafe mode). The Worker also
--- creates this table on first use, so existing databases do not need this file re-run.
-CREATE TABLE IF NOT EXISTS library_settings (
+-- Staff-editable kiosk settings (the reason list and the Wildcat Cafe mode). Not the legacy
+-- library_settings table from the old status feature, which has a different shape and is left
+-- alone. The Worker also creates this table on first use, so existing databases do not need this
+-- file re-run.
+CREATE TABLE IF NOT EXISTS library_kiosk_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL
