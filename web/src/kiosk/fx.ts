@@ -179,33 +179,25 @@ export function createEffects(front: HTMLElement, back: HTMLElement) {
     return duration
   }
 
-  /** The scanner fires: a streak flies from the scanner hint to the card, which then ripples. */
-  function scanAccepted(scanner: Element | null, target: Element | null): number {
+  /**
+   * The scanner fires: two soft rings ripple out from the barcode icon. The icon's own bounce
+   * and bar wave are CSS on the kiosk side. Returns how long the beat lasts.
+   */
+  function scanAccepted(target: Element | null): number {
     if (motionReduced()) return 0
-    const origin = centerOf(scanner) ?? { x: window.innerWidth - 70, y: window.innerHeight - 70 }
-    const destination = centerOf(target) ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 }
-    const flight = lightTrail(origin, destination, { bow: 0.2 })
-
-    const ring = spawn("fx-wavefront")
-    place(ring, origin, 120)
-    const arriveScale = Math.max(160, Math.hypot(destination.x - origin.x, destination.y - origin.y)) / 60
-    run(ring, [
-      { offset: 0, transform: "scale(.16)", opacity: 0 },
-      { offset: 0.14, transform: `scale(${(arriveScale * 0.22).toFixed(2)})`, opacity: 1 },
-      { offset: Math.min(0.85, flight / 460), transform: `scale(${arriveScale.toFixed(2)})`, opacity: 0.7 },
-      { offset: 1, transform: `scale(${(arriveScale * 1.5).toFixed(2)})`, opacity: 0 },
-    ], { duration: 460, easing: "cubic-bezier(.22,.72,.28,1)", fill: "forwards" })
-
-    window.setTimeout(() => {
+    const point = centerOf(target) ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+    ;[0, 130].forEach((delay) => {
       const ripple = spawn("fx-ripple")
-      place(ripple, centerOf(target) ?? destination, 96)
-      run(ripple, [{ transform: "scale(.34)", opacity: 0.85 }, { transform: "scale(3.1)", opacity: 0 }], {
-        duration: 320,
+      // Same size and corner radius as the icon tile, so each ring starts right at its edge.
+      place(ripple, point, 112)
+      run(ripple, [{ transform: "scale(1)", opacity: 0.8 }, { transform: "scale(2.2)", opacity: 0 }], {
+        duration: 520,
+        delay,
         easing: "cubic-bezier(.16,.8,.3,1)",
         fill: "forwards",
       })
-    }, flight - 20)
-    return flight + 130
+    })
+    return 380
   }
 
   /** Soft bloom as a recognised ID turns into the next screen. */

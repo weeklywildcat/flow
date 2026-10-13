@@ -3,7 +3,6 @@ import { REGEXP_ONLY_DIGITS } from "input-otp"
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
 import {
   Alert02Icon,
-  ArrowRight02Icon,
   BookOpen01Icon,
   Books01Icon,
   BulbIcon,
@@ -26,7 +25,6 @@ import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { InputOTP, InputOTPGroup, InputOTPSeparator, InputOTPSlot } from "@/components/ui/input-otp"
 import { Spinner } from "@/components/ui/spinner"
-import { FlowMark } from "@/components/flow-mark"
 import { cn } from "@/lib/utils"
 import {
   IS_LOCAL,
@@ -104,8 +102,9 @@ export function Kiosk() {
   const [screen, setScreenState] = React.useState<Screen>({ kind: "booting" })
   const [screenKey, setScreenKey] = React.useState(0)
   const [reading, setReading] = React.useState(false)
-  const [kick, setKick] = React.useState(0)
   const [selectedReason, setSelectedReason] = React.useState<string | null>(null)
+  // Bumped on every scan to replay the barcode icon's bounce and bar wave.
+  const [scanHit, setScanHit] = React.useState(0)
   const [funFacts, setFunFacts] = React.useState<FunFacts | null | "error">(null)
 
   const screenRef = React.useRef<Screen>(screen)
@@ -121,7 +120,6 @@ export function Kiosk() {
   const checkingConnection = React.useRef(false)
 
   const scanInput = React.useRef<HTMLInputElement>(null)
-  const scannerHint = React.useRef<HTMLDivElement>(null)
   const focal = React.useRef<HTMLDivElement>(null)
   const fxFront = React.useRef<HTMLDivElement>(null)
   const fxBack = React.useRef<HTMLDivElement>(null)
@@ -269,8 +267,8 @@ export function Kiosk() {
     busy.current = true
     barcode.current = scanned
     setReading(true)
-    setKick((count) => count + 1)
-    const beatEnds = performance.now() + (effects.current?.scanAccepted(scannerHint.current, focal.current) ?? 0)
+    setScanHit((count) => count + 1)
+    const beatEnds = performance.now() + (effects.current?.scanAccepted(focal.current) ?? 0)
     // Let the arrival beat land before the "checking" copy can interrupt it.
     timers.current.working = window.setTimeout(() => go({ kind: "working" }), 640)
 
@@ -476,16 +474,7 @@ export function Kiosk() {
     <div className="kiosk relative flex h-dvh flex-col overflow-hidden text-foreground select-none" data-tone={tone(screen)}>
       <div className="fx-layer" ref={fxBack} aria-hidden="true" />
 
-      <header className="relative z-10 flex items-center justify-between gap-4 px-[clamp(1rem,3vw,2.5rem)] pt-[clamp(0.75rem,2.5vh,1.75rem)]">
-        <div className="flex items-center gap-3">
-          <FlowMark className="size-11 rounded-2xl shadow-lg shadow-primary/25" />
-          <div className="leading-tight">
-            <p className="text-lg font-semibold tracking-tight">Ninety Six High School Library</p>
-            <p className="text-sm text-muted-foreground">
-              <Greeting />
-            </p>
-          </div>
-        </div>
+      <header className="relative z-10 flex justify-center px-[clamp(1rem,3vw,2.5rem)] pt-[clamp(0.75rem,2.5vh,1.75rem)]">
         <LiveClock />
       </header>
 
@@ -509,15 +498,21 @@ export function Kiosk() {
 
             {screen.kind === "idle" ? (
               <Centered>
-                <div ref={focal} className="kiosk-bob relative flex size-28 items-center justify-center rounded-[2.25rem] bg-primary/10 text-primary ring-1 ring-primary/15">
-                  <BarcodeMark className="size-16" />
-                  <span className="kiosk-scanline absolute inset-x-4 top-1/2 h-0.5 rounded-full bg-primary shadow-[0_0_14px_2px] shadow-primary/60" />
+                <div
+                  ref={focal}
+                  key={scanHit}
+                  className={cn(
+                    "relative flex size-28 items-center justify-center rounded-[2.25rem] bg-primary/10 text-primary",
+                    scanHit > 0 ? "kiosk-scan-hit" : "kiosk-float"
+                  )}
+                >
+                  <BarcodeMark className="size-16" wave={scanHit > 0} />
+                  <span className="kiosk-scanline absolute inset-x-4 top-1/2 h-0.5 rounded-full bg-primary" />
                 </div>
                 <div className="flex flex-col gap-2">
                   <Title>Scan your student ID</Title>
                   <Lead>to check in or check out</Lead>
                 </div>
-                <StatusPill active={reading}>{reading ? "Reading your ID…" : "Ready when you are"}</StatusPill>
               </Centered>
             ) : null}
 
@@ -667,23 +662,12 @@ export function Kiosk() {
           ) : null}
         </Card>
 
-        <div
-          ref={scannerHint}
-          key={`hint-${kick}`}
-          className={cn(
-            "absolute right-[clamp(1rem,3vw,2.5rem)] bottom-[clamp(0.25rem,1vh,0.75rem)] flex items-center gap-2 text-[clamp(0.85rem,1.4vw,1.1rem)] font-semibold text-primary",
-            kick > 0 && "kiosk-kick"
-          )}
-          aria-label="Barcode Scanner"
-        >
-          Barcode Scanner
-          <HugeiconsIcon icon={ArrowRight02Icon} strokeWidth={2.5} className="kiosk-nudge size-5" />
-        </div>
       </main>
 
       <footer className="relative z-10 flex items-center justify-between gap-4 px-[clamp(1rem,3vw,2.5rem)] pb-[clamp(0.75rem,2vh,1.25rem)] text-sm text-muted-foreground">
         <span>{hint}</span>
         <span
+          hidden={screen.kind === "idle" && !reading}
           className={cn(
             "flex items-center gap-2 rounded-full bg-card/70 px-3 py-1 text-xs font-semibold tracking-wide uppercase ring-1 ring-black/5 backdrop-blur",
             tone(screen) === "error" && "text-rose-600",
@@ -723,15 +707,15 @@ export function Kiosk() {
 }
 
 /** Scanner-frame corners around a barcode, drawn by hand so the bars read as a barcode. */
-function BarcodeMark({ className }: { className?: string }) {
+function BarcodeMark({ className, wave }: { className?: string; wave?: boolean }) {
   const bars = [
     [14, 2.5], [19, 1.5], [22.5, 3], [28, 1.5], [31.5, 2.5], [36, 1.5], [39.5, 3.5], [45, 1.5], [48.5, 2],
   ]
   return (
-    <svg viewBox="0 0 64 64" className={className} fill="none" aria-hidden="true">
+    <svg viewBox="0 0 64 64" className={cn(className, wave && "kiosk-bars-wave")} fill="none" aria-hidden="true">
       <path d="M8 18v-6a4 4 0 0 1 4-4h6M46 8h6a4 4 0 0 1 4 4v6M56 46v6a4 4 0 0 1-4 4h-6M18 56h-6a4 4 0 0 1-4-4v-6" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" />
-      {bars.map(([x, width]) => (
-        <rect key={x} x={x} y="18" width={width} height="28" rx="0.75" fill="currentColor" />
+      {bars.map(([x, width], index) => (
+        <rect key={x} x={x} y="18" width={width} height="28" rx="0.75" fill="currentColor" style={{ "--i": index } as React.CSSProperties} />
       ))}
     </svg>
   )
@@ -742,7 +726,7 @@ function Centered({ children }: { children: React.ReactNode }) {
 }
 
 function Title({ children }: { children: React.ReactNode }) {
-  return <h1 className="text-[clamp(2rem,4.6vw,3.5rem)] leading-[1.05] font-bold tracking-tight text-balance">{children}</h1>
+  return <h1 className="text-[clamp(2rem,4.6vw,3.5rem)] leading-[1.1] font-semibold tracking-[-0.01em] text-balance">{children}</h1>
 }
 
 function Lead({ children }: { children: React.ReactNode }) {
@@ -995,15 +979,10 @@ function PairingForm({
   )
 }
 
-function Greeting() {
-  const hour = useClock().getHours()
-  return <>{hour < 12 ? "Good morning!" : hour < 17 ? "Good afternoon!" : "Good evening!"}</>
-}
-
 function LiveClock() {
   const now = useClock()
   return (
-    <div className="text-right leading-tight">
+    <div className="text-center leading-tight">
       <p className="text-2xl font-semibold tracking-tight tabular-nums">
         {now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
       </p>

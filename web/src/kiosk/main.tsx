@@ -1,7 +1,7 @@
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 
-import "@fontsource-variable/figtree"
+import "@fontsource-variable/public-sans"
 import "../index.css"
 import "./kiosk.css"
 import { Kiosk } from "./kiosk"

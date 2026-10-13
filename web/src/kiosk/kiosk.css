@@ -5,7 +5,7 @@
   --ease-spring: cubic-bezier(0.22, 1.2, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 0.84, 0.3, 1);
   background: var(--background);
-  font-family: "Figtree Variable", sans-serif;
+  font-family: "Public Sans Variable", sans-serif;
 }
 
 /* ---- One-shot effects (positioned by fx.ts) ---- */
@@ -32,19 +32,11 @@
   background: linear-gradient(90deg, rgb(139 92 246 / 0) 0%, rgb(139 92 246 / 0.45) 40%, rgb(196 181 253 / 0.9) 78%, #fff 95%);
   filter: drop-shadow(0 0 14px rgb(139 92 246 / 0.75));
 }
-.fx-wavefront {
-  width: 120px;
-  height: 120px;
-  border-radius: 999px;
-  border: 2.5px solid rgb(16 185 129 / 0.62);
-  box-shadow: 0 0 0 5px rgb(16 185 129 / 0.1), 0 0 30px rgb(16 185 129 / 0.45);
-}
 .fx-ripple {
-  width: 96px;
-  height: 96px;
-  border-radius: 999px;
-  background: radial-gradient(circle, transparent 0 48%, rgb(16 185 129 / 0.34) 62%, rgb(16 185 129 / 0.12) 76%, transparent 88%);
-  filter: blur(1.5px);
+  width: 112px;
+  height: 112px;
+  border-radius: 2.25rem;
+  border: 2px solid rgb(16 185 129 / 0.45);
 }
 .fx-bloom {
   width: 130px;
@@ -118,9 +110,9 @@
     opacity: 1;
   }
 }
-@keyframes kiosk-bob {
+@keyframes kiosk-float {
   50% {
-    transform: translateY(-6px) rotate(-2deg);
+    transform: translateY(-4px);
   }
 }
 @keyframes kiosk-scanline {
@@ -137,22 +129,36 @@
     transform: translateY(14px);
   }
 }
+/* A scan lands: the tile squashes and springs back while the bars hop left to right. */
+@keyframes kiosk-scan-hit {
+  0% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(0.92);
+  }
+  65% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes kiosk-bar-hop {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  45% {
+    transform: scaleY(0.55);
+  }
+}
 @keyframes kiosk-countdown {
   from {
     transform: scaleX(1);
   }
   to {
     transform: scaleX(0);
-  }
-}
-@keyframes kiosk-nudge {
-  50% {
-    transform: translateX(6px);
-  }
-}
-@keyframes kiosk-kick {
-  30% {
-    transform: translateX(8px) scale(1.06);
   }
 }
 @keyframes kiosk-shake {
@@ -172,21 +178,24 @@
 .kiosk-pop {
   animation: kiosk-pop 520ms var(--ease-spring) both;
 }
-.kiosk-bob {
-  animation: kiosk-bob 3.2s ease-in-out infinite;
+.kiosk-float {
+  animation: kiosk-float 3.2s ease-in-out infinite;
 }
 .kiosk-scanline {
   animation: kiosk-scanline 2.4s ease-in-out infinite;
 }
+.kiosk-scan-hit {
+  animation: kiosk-scan-hit 420ms var(--ease-spring) both;
+}
+.kiosk-bars-wave rect {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: kiosk-bar-hop 360ms ease-in-out both;
+  animation-delay: calc(var(--i) * 28ms);
+}
 .kiosk-countdown {
   transform-origin: left;
   animation: kiosk-countdown var(--duration) linear forwards;
-}
-.kiosk-nudge {
-  animation: kiosk-nudge 1.6s ease-in-out infinite;
-}
-.kiosk-kick {
-  animation: kiosk-kick 300ms var(--ease-out);
 }
 .kiosk-shake {
   animation: kiosk-shake 420ms ease-in-out;
@@ -204,10 +213,10 @@
 @media (prefers-reduced-motion: reduce) {
   .kiosk-enter,
   .kiosk-pop,
-  .kiosk-bob,
+  .kiosk-float,
   .kiosk-scanline,
-  .kiosk-nudge,
-  .kiosk-kick,
+  .kiosk-scan-hit,
+  .kiosk-bars-wave rect,
   .kiosk-shake {
     animation: none;
   }
