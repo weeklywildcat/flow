@@ -506,8 +506,9 @@ export function Kiosk() {
                     scanHit > 0 ? "kiosk-scan-hit" : "kiosk-float"
                   )}
                 >
-                  <BarcodeMark className="size-16" wave={scanHit > 0} />
-                  <span className="kiosk-scanline absolute inset-x-4 top-1/2 h-0.5 rounded-full bg-primary" />
+                  {/* While an ID is being read the bars dance and the scan line steps aside. */}
+                  <BarcodeMark className="size-16" dancing={reading} />
+                  {reading ? null : <span className="kiosk-scanline absolute inset-x-4 top-1/2 h-0.5 rounded-full bg-primary" />}
                 </div>
                 <div className="flex flex-col gap-2">
                   <Title>Scan your student ID</Title>
@@ -519,7 +520,7 @@ export function Kiosk() {
             {screen.kind === "working" ? (
               <Centered>
                 <div ref={focal} className="flex size-28 items-center justify-center rounded-[2.25rem] bg-primary/10 text-primary">
-                  <Spinner className="size-12" />
+                  <BarcodeMark className="size-16" dancing />
                 </div>
                 <div className="flex flex-col gap-2">
                   <Title>One moment…</Title>
@@ -707,18 +708,29 @@ export function Kiosk() {
 }
 
 /** Scanner-frame corners around a barcode, drawn by hand so the bars read as a barcode. */
-function BarcodeMark({ className, wave }: { className?: string; wave?: boolean }) {
+function BarcodeMark({ className, dancing }: { className?: string; dancing?: boolean }) {
   const bars = [
     [14, 2.5], [19, 1.5], [22.5, 3], [28, 1.5], [31.5, 2.5], [36, 1.5], [39.5, 3.5], [45, 1.5], [48.5, 2],
   ]
   return (
-    <svg viewBox="0 0 64 64" className={cn(className, wave && "kiosk-bars-wave")} fill="none" aria-hidden="true">
+    <svg viewBox="0 0 64 64" className={cn(className, dancing && "kiosk-bars-dance")} fill="none" aria-hidden="true">
       <path d="M8 18v-6a4 4 0 0 1 4-4h6M46 8h6a4 4 0 0 1 4 4v6M56 46v6a4 4 0 0 1-4 4h-6M18 56h-6a4 4 0 0 1-4-4v-6" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" />
       {bars.map(([x, width], index) => (
         <rect key={x} x={x} y="18" width={width} height="28" rx="0.75" fill="currentColor" style={{ "--i": index } as React.CSSProperties} />
       ))}
     </svg>
   )
+}
+
+/**
+ * Cleans a name as a student types it: only letters (accented ones included), spaces, hyphens
+ * and apostrophes get through, so no digits or symbols. Then the first letter is uppercased;
+ * the rest is left exactly as typed, so names like McKenzie or DeShawn keep their own capitals.
+ */
+function cleanName(value: string): string {
+  return value
+    .replace(/[^\p{L}\p{M} '’-]/gu, "")
+    .replace(/^(\s*)(\S)/, (_match, space: string, letter: string) => space + letter.toLocaleUpperCase())
 }
 
 function Centered({ children }: { children: React.ReactNode }) {
@@ -799,11 +811,11 @@ function NewStudentForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <Field>
           <FieldLabel htmlFor="kiosk-first">First name</FieldLabel>
-          <Input id="kiosk-first" className="h-12 text-lg" autoComplete="given-name" autoFocus required value={firstName} onChange={(event) => setFirstName(event.target.value)} />
+          <Input id="kiosk-first" className="h-12 text-lg" autoComplete="given-name" autoCapitalize="words" autoFocus required value={firstName} onChange={(event) => setFirstName(cleanName(event.target.value))} />
         </Field>
         <Field>
           <FieldLabel htmlFor="kiosk-last">Last name</FieldLabel>
-          <Input id="kiosk-last" className="h-12 text-lg" autoComplete="family-name" required value={lastName} onChange={(event) => setLastName(event.target.value)} />
+          <Input id="kiosk-last" className="h-12 text-lg" autoComplete="family-name" autoCapitalize="words" required value={lastName} onChange={(event) => setLastName(cleanName(event.target.value))} />
         </Field>
       </div>
       <fieldset className="flex flex-col gap-2">
@@ -883,11 +895,11 @@ function NameCheckForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <Field>
           <FieldLabel htmlFor="kiosk-confirm-first">First name</FieldLabel>
-          <Input id="kiosk-confirm-first" className="h-12 text-lg" autoComplete="off" autoFocus required value={firstName} onChange={(event) => setFirstName(event.target.value)} />
+          <Input id="kiosk-confirm-first" className="h-12 text-lg" autoComplete="off" autoCapitalize="words" autoFocus required value={firstName} onChange={(event) => setFirstName(cleanName(event.target.value))} />
         </Field>
         <Field>
           <FieldLabel htmlFor="kiosk-confirm-last">Last name</FieldLabel>
-          <Input id="kiosk-confirm-last" className="h-12 text-lg" autoComplete="off" required value={lastName} onChange={(event) => setLastName(event.target.value)} />
+          <Input id="kiosk-confirm-last" className="h-12 text-lg" autoComplete="off" autoCapitalize="words" required value={lastName} onChange={(event) => setLastName(cleanName(event.target.value))} />
         </Field>
       </div>
       <div className="flex flex-wrap justify-center gap-3">

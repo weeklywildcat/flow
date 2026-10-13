@@ -187,11 +187,12 @@
 .kiosk-scan-hit {
   animation: kiosk-scan-hit 420ms var(--ease-spring) both;
 }
-.kiosk-bars-wave rect {
+/* Loops for as long as the ID is being read; each bar starts a beat after the one before. */
+.kiosk-bars-dance rect {
   transform-box: fill-box;
   transform-origin: center;
-  animation: kiosk-bar-hop 360ms ease-in-out both;
-  animation-delay: calc(var(--i) * 28ms);
+  animation: kiosk-bar-hop 520ms ease-in-out infinite;
+  animation-delay: calc(var(--i) * 45ms);
 }
 .kiosk-countdown {
   transform-origin: left;
@@ -216,7 +217,7 @@
   .kiosk-float,
   .kiosk-scanline,
   .kiosk-scan-hit,
-  .kiosk-bars-wave rect,
+  .kiosk-bars-dance rect,
   .kiosk-shake {
     animation: none;
   }

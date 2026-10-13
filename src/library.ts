@@ -284,6 +284,7 @@ async function handleConfirmName(request: Request, env: LibraryEnv, ctx: Executi
   const lastName = normalizeString(body.lastName, 80);
   if (!barcode) return json({ error: "Scan a student ID first." }, 400);
   if (!firstName || !lastName) return json({ error: "Enter your first and last name." }, 400);
+  if (!isPlainName(firstName) || !isPlainName(lastName)) return json({ error: NAME_CHARACTERS_ERROR }, 400);
 
   const student = await findStudentByBarcode(env, barcode);
   if (!student) return json({ error: "Student was not found." }, 404);
@@ -430,6 +431,7 @@ async function handleCreateStudent(request: Request, env: LibraryEnv, ctx: Execu
 
   if (!barcode) return json({ error: "Scan a student ID first." }, 400);
   if (!firstName || !lastName) return json({ error: "Enter first and last name." }, 400);
+  if (!isPlainName(firstName) || !isPlainName(lastName)) return json({ error: NAME_CHARACTERS_ERROR }, 400);
   if (!GRADE_OPTIONS.includes(grade)) return json({ error: "Choose a grade." }, 400);
 
   const now = new Date().toISOString();
@@ -1409,6 +1411,13 @@ function normalizeReason(value: unknown): string {
   if (typeof value !== "string") return "";
   const reason = normalizeMessage(value, 80);
   return reason.length > 0 ? reason : "";
+}
+
+const NAME_CHARACTERS_ERROR = "Names can only use letters, spaces, hyphens, and apostrophes.";
+
+/** Names typed at the kiosk: letters (accented ones included), spaces, hyphens and apostrophes. */
+function isPlainName(value: string): boolean {
+  return /^[\p{L}\p{M} '’-]+$/u.test(value);
 }
 
 function normalizeString(value: unknown, maxLength: number): string {
